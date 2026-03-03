@@ -1,0 +1,4 @@
+backend/src/main/resources/application.properties
+.env
+target/
+node_modules/
