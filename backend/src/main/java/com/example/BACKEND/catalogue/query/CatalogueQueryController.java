@@ -1,67 +1,43 @@
 package com.example.BACKEND.catalogue.query;
 
+import com.example.BACKEND.tenant.TenantContextResolver;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
 
-/**
- * CatalogueQueryController
- *
- * Generic NLP query endpoint — works for ANY client with an approved catalogue.
- *
- * POST /api/query/ask
- * {
- *   "clientId": "netflix",
- *   "question": "How many movies were added in 2023?"
- * }
- *
- * Returns:
- * {
- *   "question":     "How many movies were added in 2023?",
- *   "generatedSql": "SELECT COUNT(*) ...",
- *   "rowCount":     1,
- *   "rows":         [{ "count": 512 }]
- * }
- */
 @RestController
 @RequestMapping("/api/query")
 public class CatalogueQueryController {
 
     private final CatalogueQueryService queryService;
+    private final TenantContextResolver tenantContextResolver;
 
-    public CatalogueQueryController(CatalogueQueryService queryService) {
+    public CatalogueQueryController(
+            CatalogueQueryService queryService,
+            TenantContextResolver tenantContextResolver
+    ) {
         this.queryService = queryService;
+        this.tenantContextResolver = tenantContextResolver;
     }
 
     @PostMapping("/ask")
-    public ResponseEntity<?> ask(@RequestBody Map<String, String> body) {
-
-        String clientId = body.get("clientId");
-        String question = body.get("question");
-
-        if (clientId == null || clientId.isBlank()) {
-            return ResponseEntity.badRequest()
-                    .body(Map.of("error", "clientId is required"));
-        }
+    public ResponseEntity<?> ask(
+            @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
+            @RequestBody Map<String, Object> body
+    ) {
+        String question = body.get("question") == null ? null : String.valueOf(body.get("question")).trim();
         if (question == null || question.isBlank()) {
-            return ResponseEntity.badRequest()
-                    .body(Map.of("error", "question is required"));
+            return ResponseEntity.badRequest().body(Map.of("error", "question is required"));
         }
 
-        System.out.println("[QueryController] clientId=" + clientId + " | question=" + question);
-
-        try {
-            CatalogueQueryService.QueryResult result = queryService.ask(clientId, question);
-            return ResponseEntity.ok(result);
-        } catch (IllegalStateException e) {
-            // No approved catalogue found
-            return ResponseEntity.status(404)
-                    .body(Map.of("error", e.getMessage()));
-        } catch (Exception e) {
-            System.err.println("[QueryController] Error: " + e.getMessage());
-            return ResponseEntity.status(500)
-                    .body(Map.of("error", e.getMessage()));
-        }
+        String clientId = tenantContextResolver.resolveClientId(clientIdHeader, body);
+        CatalogueQueryService.QueryResult result = queryService.ask(clientId, question);
+        return ResponseEntity.ok(Map.of(
+                "question", result.getQuestion(),
+                "generatedSql", result.getGeneratedSql(),
+                "rowCount", result.getRowCount(),
+                "rows", result.getRows()
+        ));
     }
 }

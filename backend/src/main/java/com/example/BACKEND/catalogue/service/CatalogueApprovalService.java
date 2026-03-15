@@ -52,10 +52,9 @@ public class CatalogueApprovalService {
         catalogue.setUpdatedAt(LocalDateTime.now());
         catalogueRepo.save(catalogue);
 
-        // Replace any existing snapshot for this client
-        snapshotRepo.deleteByClientId(catalogue.getClientId());
-
-        CatalogueSnapshotEntity snapshot = new CatalogueSnapshotEntity();
+        // Upsert snapshot for this client to avoid unique-key collisions on client_id.
+        CatalogueSnapshotEntity snapshot = snapshotRepo.findByClientId(catalogue.getClientId())
+                .orElseGet(CatalogueSnapshotEntity::new);
         snapshot.setCatalogueId(catalogue.getId());
         snapshot.setClientId(catalogue.getClientId());
         snapshot.setCatalogueJson(serializeCatalogue(catalogue));
@@ -162,4 +161,5 @@ public class CatalogueApprovalService {
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Catalogue not found with id: " + id));
     }
+
 }
