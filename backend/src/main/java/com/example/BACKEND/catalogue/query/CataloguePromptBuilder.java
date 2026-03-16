@@ -82,5 +82,6 @@ public class CataloguePromptBuilder {
         sb.append("7. If question cannot be answered, return: SELECT 'Cannot answer this question from available data' AS message;\n");
         sb.append("8. Semantic mapping is critical: 'released in YEAR' should target release/production year columns, not date_added columns.\n");
         sb.append("9. Integer year columns must use equals, e.g. release_year = 2020 (not ILIKE).\n");
+        sb.append("10. Never invent placeholder columns like date_column/year_column; use only columns listed in schema.\n");
     }
 }

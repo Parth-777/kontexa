@@ -7,6 +7,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
+import java.sql.Time;
+import java.sql.Timestamp;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -54,6 +60,7 @@ public class CatalogueQueryService {
         sql = injectMissingCategoryFilters(sql, question, fullNode);
         sql = enforceExplicitIntentFilters(sql, question, fullNode);
         sql = normalizeSchemaQualifiers(sql, clientId, fullNode);
+        sql = normalizeYearDateFilters(sql, question, fullNode);
         sql = normalizeDatePredicates(sql, fullNode);
         sql = fixIntegerColumnILike(sql, fullNode);
         sql = fixSemanticColumnMapping(sql, question, fullNode);
@@ -295,6 +302,162 @@ public class CatalogueQueryService {
         return normalized;
     }
 
+    /**
+     * Repairs generic/invalid year predicates into concrete, catalogue-backed predicates.
+     * Example fixes:
+     * - EXTRACT(YEAR FROM date_column) = 2018  -> EXTRACT(YEAR FROM order_date) = 2018
+     * - EXTRACT(YEAR FROM some_text_date) = 2018 -> some_text_date ILIKE '%2018%'
+     */
+    private String normalizeYearDateFilters(String sql, String question, JsonNode catalogueNode) {
+        if (!isFilterableSelect(sql)) return sql;
+
+        List<ColumnMeta> dateCandidates = collectDateCandidates(catalogueNode);
+        if (dateCandidates.isEmpty()) return sql;
+
+        String normalized = sql;
+        normalized = rewriteYearFunctionPredicate(
+                normalized,
+                question,
+                dateCandidates,
+                "(?i)EXTRACT\\s*\\(\\s*YEAR\\s+FROM\\s+([a-zA-Z_][a-zA-Z0-9_\\.]*)\\s*\\)\\s*=\\s*(19[0-9]{2}|20[0-9]{2})"
+        );
+        normalized = rewriteYearFunctionPredicate(
+                normalized,
+                question,
+                dateCandidates,
+                "(?i)DATE_PART\\s*\\(\\s*'year'\\s*,\\s*([a-zA-Z_][a-zA-Z0-9_\\.]*)\\s*\\)\\s*=\\s*(19[0-9]{2}|20[0-9]{2})"
+        );
+        normalized = rewriteYearFunctionPredicate(
+                normalized,
+                question,
+                dateCandidates,
+                "(?i)YEAR\\s*\\(\\s*([a-zA-Z_][a-zA-Z0-9_\\.]*)\\s*\\)\\s*=\\s*(19[0-9]{2}|20[0-9]{2})"
+        );
+        return normalized;
+    }
+
+    private String rewriteYearFunctionPredicate(
+            String sql,
+            String question,
+            List<ColumnMeta> dateCandidates,
+            String patternText
+    ) {
+        Pattern pattern = Pattern.compile(patternText);
+        Matcher matcher = pattern.matcher(sql);
+        StringBuffer sb = new StringBuffer();
+        boolean changed = false;
+
+        while (matcher.find()) {
+            String expr = matcher.group(1);
+            String year = matcher.group(2);
+
+            ColumnMeta chosen = resolveDateColumnForExpression(expr, question, dateCandidates);
+            if (chosen == null) {
+                matcher.appendReplacement(sb, Matcher.quoteReplacement(matcher.group(0)));
+                continue;
+            }
+
+            String qualifiedColumn = qualifyLikeOriginalExpression(expr, chosen.columnName);
+            String replacement;
+            if (isDateType(chosen.dataType)) {
+                replacement = "EXTRACT(YEAR FROM " + qualifiedColumn + ") = " + year;
+            } else {
+                replacement = qualifiedColumn + " ILIKE '%" + year + "%'";
+            }
+
+            matcher.appendReplacement(sb, Matcher.quoteReplacement(replacement));
+            changed = true;
+        }
+        matcher.appendTail(sb);
+        return changed ? sb.toString() : sql;
+    }
+
+    private List<ColumnMeta> collectDateCandidates(JsonNode catalogueNode) {
+        List<ColumnMeta> candidates = new ArrayList<>();
+        for (JsonNode table : catalogueNode.path("tables")) {
+            for (JsonNode col : table.path("columns")) {
+                String colName = col.path("columnName").asText("");
+                String dataType = col.path("dataType").asText("").toLowerCase();
+                String desc = col.path("description").asText("").toLowerCase();
+                if (colName.isBlank()) continue;
+
+                boolean byType = isDateType(dataType);
+                boolean byName = looksDateLikeColumnName(colName);
+                boolean byDesc = desc.contains("date") || desc.contains("time") || desc.contains("timestamp");
+                if (byType || byName || byDesc) {
+                    candidates.add(new ColumnMeta(colName, dataType));
+                }
+            }
+        }
+        return candidates;
+    }
+
+    private ColumnMeta resolveDateColumnForExpression(
+            String expression,
+            String question,
+            List<ColumnMeta> dateCandidates
+    ) {
+        String baseColumn = extractBaseColumnName(expression).toLowerCase();
+
+        for (ColumnMeta c : dateCandidates) {
+            if (c.columnName.equalsIgnoreCase(baseColumn)) return c;
+        }
+
+        if (baseColumn.contains("date_column")
+                || baseColumn.contains("year_column")
+                || baseColumn.contains("time_column")
+                || baseColumn.contains("timestamp_column")) {
+            return pickBestDateCandidate(question, dateCandidates);
+        }
+
+        return pickBestDateCandidate(question, dateCandidates);
+    }
+
+    private ColumnMeta pickBestDateCandidate(String question, List<ColumnMeta> dateCandidates) {
+        String q = question == null ? "" : question.toLowerCase();
+        ColumnMeta best = null;
+        int bestScore = Integer.MIN_VALUE;
+
+        for (ColumnMeta c : dateCandidates) {
+            String name = c.columnName.toLowerCase();
+            int score = 0;
+
+            if (isDateType(c.dataType)) score += 30;
+            if (name.equals("date")) score += 25;
+            if (name.endsWith("_date")) score += 18;
+            if (name.contains("date")) score += 14;
+            if (name.contains("year")) score += 10;
+            if (name.contains("time")) score += 8;
+
+            if (q.contains("open") && name.contains("date")) score += 8;
+            if (q.contains("created") && name.contains("created")) score += 12;
+            if (q.contains("updated") && name.contains("updated")) score += 12;
+
+            if (score > bestScore) {
+                bestScore = score;
+                best = c;
+            }
+        }
+        return best;
+    }
+
+    private boolean looksDateLikeColumnName(String colName) {
+        String n = colName.toLowerCase();
+        return n.contains("date") || n.contains("time") || n.contains("timestamp") || n.contains("year");
+    }
+
+    private String qualifyLikeOriginalExpression(String originalExpr, String targetColumn) {
+        int dot = originalExpr.lastIndexOf('.');
+        if (dot < 0) return targetColumn;
+        String prefix = originalExpr.substring(0, dot + 1);
+        return prefix + targetColumn;
+    }
+
+    private String extractBaseColumnName(String expr) {
+        int dot = expr.lastIndexOf('.');
+        return dot >= 0 ? expr.substring(dot + 1) : expr;
+    }
+
     private String fixIntegerColumnILike(String sql, JsonNode catalogueNode) {
         if (!isFilterableSelect(sql)) return sql;
         String normalized = sql;
@@ -402,13 +565,43 @@ public class CatalogueQueryService {
                 Map<String, Object> row = new LinkedHashMap<>();
                 int cols = rs.getMetaData().getColumnCount();
                 for (int i = 1; i <= cols; i++) {
-                    row.put(rs.getMetaData().getColumnLabel(i), rs.getObject(i));
+                    Object rawValue = rs.getObject(i);
+                    row.put(rs.getMetaData().getColumnLabel(i), normalizeJdbcValue(rawValue));
                 }
                 return row;
             });
         } catch (Exception e) {
             throw new RuntimeException("SQL execution failed.\nSQL: " + sql + "\nError: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Avoid timezone drift in API responses:
+     * - DATE should stay date-only.
+     * - TIMESTAMP should stay local date-time text without implicit UTC conversion.
+     */
+    private Object normalizeJdbcValue(Object value) {
+        if (value == null) return null;
+
+        if (value instanceof java.sql.Date d) {
+            LocalDate localDate = d.toLocalDate();
+            return localDate != null ? localDate.toString() : null;
+        }
+        if (value instanceof Timestamp ts) {
+            LocalDateTime localDateTime = ts.toLocalDateTime();
+            return localDateTime != null ? localDateTime.toString() : null;
+        }
+        if (value instanceof Time t) {
+            LocalTime localTime = t.toLocalTime();
+            return localTime != null ? localTime.toString() : null;
+        }
+        if (value instanceof LocalDate
+                || value instanceof LocalDateTime
+                || value instanceof LocalTime
+                || value instanceof OffsetDateTime) {
+            return value.toString();
+        }
+        return value;
     }
 
     public static class QueryResult {
@@ -428,5 +621,15 @@ public class CatalogueQueryService {
         public String getGeneratedSql() { return generatedSql; }
         public List<Map<String, Object>> getRows() { return rows; }
         public int getRowCount() { return rowCount; }
+    }
+
+    private static class ColumnMeta {
+        private final String columnName;
+        private final String dataType;
+
+        private ColumnMeta(String columnName, String dataType) {
+            this.columnName = columnName;
+            this.dataType = dataType;
+        }
     }
 }

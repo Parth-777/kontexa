@@ -28,37 +28,79 @@
 }
 
 .profile-trigger {
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  background: rgba(8, 14, 23, 0.82);
-  color: #d6e2f4;
-  padding: 0.58rem 0.9rem;
-  border-radius: 10px;
+  border: 1px solid rgba(130, 162, 205, 0.28);
+  background: rgba(8, 15, 27, 0.88);
+  color: #e8f1ff;
+  padding: 0.62rem 1rem;
+  border-radius: 12px;
+  font-weight: 600;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.profile-trigger:hover {
+  border-color: rgba(29, 233, 212, 0.58);
+  box-shadow: 0 10px 24px rgba(6, 18, 34, 0.44), 0 0 0 3px rgba(29, 233, 212, 0.08);
+  transform: translateY(-1px);
 }
 
 .profile-popover {
   position: absolute;
   right: 0;
-  top: calc(100% + 0.55rem);
-  width: min(320px, 85vw);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 12px;
-  background: linear-gradient(170deg, rgba(16, 27, 40, 0.95), rgba(10, 16, 27, 0.95));
-  padding: 0.75rem;
+  top: calc(100% + 0.65rem);
+  width: min(360px, 88vw);
+  border: 1px solid rgba(122, 149, 190, 0.24);
+  border-radius: 16px;
+  background: linear-gradient(170deg, rgba(13, 24, 38, 0.97), rgba(8, 14, 25, 0.97));
+  backdrop-filter: blur(10px);
+  box-shadow: 0 18px 45px rgba(3, 10, 20, 0.55), 0 0 0 1px rgba(29, 233, 212, 0.05);
+  padding: 1rem 1rem 0.92rem;
   z-index: 20;
 }
 
+.profile-title {
+  margin: 0 0 0.82rem;
+  font-size: 1.2rem;
+  color: #f3f8ff;
+}
+
+.profile-item {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  align-items: start;
+  gap: 0.72rem;
+  padding: 0.4rem 0;
+}
+
+.profile-item span {
+  color: #96abc9;
+  font-size: 0.86rem;
+  letter-spacing: 0.02em;
+}
+
 .profile-item strong {
+  color: #ecf4ff;
+  font-size: 1.04rem;
+  font-weight: 700;
   word-break: break-word;
+  line-height: 1.26;
 }
 
 .profile-signout {
-  margin-top: 0.8rem;
+  margin-top: 0.95rem;
   width: 100%;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  background: rgba(8, 14, 23, 0.86);
-  color: #dbe6f7;
-  border-radius: 10px;
-  padding: 0.55rem 0.7rem;
+  border: 1px solid rgba(115, 145, 188, 0.36);
+  background: linear-gradient(130deg, rgba(12, 24, 39, 0.95), rgba(7, 18, 31, 0.95));
+  color: #e8f1ff;
+  border-radius: 12px;
+  padding: 0.62rem 0.82rem;
+  font-weight: 600;
+  transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease;
+}
+
+.profile-signout:hover {
+  border-color: rgba(29, 233, 212, 0.6);
+  background: linear-gradient(130deg, rgba(13, 29, 46, 0.97), rgba(8, 22, 37, 0.97));
+  transform: translateY(-1px);
 }
 
 .tenant-layout {

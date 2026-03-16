@@ -48,23 +48,34 @@ function HomePage() {
         <Link to="/" className="brand">
           KONTEXA
         </Link>
-        <Link to="/signin" className="nav-link">
-          Sign in
-        </Link>
+        <div className="home-nav-links">
+          <a href="#features">Features</a>
+          <a href="#how-it-works">How It Works</a>
+          <Link to="/signin" className="nav-link">
+            Get Access
+          </Link>
+        </div>
       </nav>
+
       <section className="hero">
-        <h1>Ask your data in plain English.</h1>
+        <span className="hero-pill">Now in Early Access</span>
+        <h1>
+          Ask your data
+          <br />
+          <span>anything.</span>
+        </h1>
         <p>
-          Kontexa helps teams query complex datasets, generate charts, and build insights with
-          tenant-aware access and schema-safe SQL.
+          KONTEXA is the intelligence layer for your analytics stack. Query Amplitude, Mixpanel, or
+          PostHog with natural language - get charts, insights, and explanations in seconds.
         </p>
         <div className="hero-query-box">
-          <span>{typedText}</span>
+          <b>›</b>
+          <span>{typedText || ' '}</span>
           <i className="cursor" />
         </div>
         <div className="hero-actions">
           <Link to="/signin" className="hero-btn primary">
-            Start now
+            Get Early Access
           </Link>
           <a href="#how-it-works" className="hero-btn secondary">
             See how it works
@@ -72,58 +83,54 @@ function HomePage() {
         </div>
       </section>
 
-      <section className="product-shot">
-        <div className="product-panel">
-          <div className="product-head">
-            <strong>Kontexa Workspace</strong>
-            <small>Tenant-aware analytics view</small>
-          </div>
-          <div className="product-mock-grid">
-            <article>
-              <p>Rows returned</p>
-              <strong>962</strong>
-            </article>
-            <article>
-              <p>Avg latency</p>
-              <strong>1.8s</strong>
-            </article>
-            <article>
-              <p>Active tenants</p>
-              <strong>12</strong>
-            </article>
-            <article>
-              <p>Data sources</p>
-              <strong>Snowflake, BQ, Redshift</strong>
-            </article>
-          </div>
-        </div>
+      <section id="features" className="features-grid">
+        <article>
+          <span className="feature-icon">💬</span>
+          <h3>Natural Language Queries</h3>
+          <p>Ask questions in plain English. No SQL, no dashboards to configure, no query builders.</p>
+        </article>
+        <article>
+          <span className="feature-icon">🧠</span>
+          <h3>Semantic Ontology Layer</h3>
+          <p>Bridges raw event data to human concepts - understands your product domain automatically.</p>
+        </article>
+        <article>
+          <span className="feature-icon">📊</span>
+          <h3>Instant Visualizations</h3>
+          <p>Get charts, tables, and explanations. Every result includes assumptions and methodology.</p>
+        </article>
+        <article>
+          <span className="feature-icon">⚡</span>
+          <h3>Multi-Source Intelligence</h3>
+          <p>Connects to Amplitude, Mixpanel, PostHog, and data warehouses - query all at once.</p>
+        </article>
+        <article>
+          <span className="feature-icon">🛡️</span>
+          <h3>Transparent Assumptions</h3>
+          <p>Every answer shows its reasoning. Know exactly what data was used and how it was interpreted.</p>
+        </article>
+        <article>
+          <span className="feature-icon">🔗</span>
+          <h3>Reverse Instrumentation</h3>
+          <p>Identifies gaps in your tracking plan and suggests events you should be capturing.</p>
+        </article>
       </section>
 
-      <section className="trusted">
-        <p>Trusted by modern data teams</p>
-        <div className="trusted-logos">
-          <span>NETFLIX</span>
-          <span>MSCI</span>
-          <span>GOOGLE</span>
-          <span>MICROSOFT</span>
-          <span>ACME</span>
-        </div>
+      <section id="how-it-works" className="final-cta">
+        <h2>Ready to talk to your data?</h2>
+        <p>
+          Join the early access program. Be among the first teams to unlock natural language
+          analytics.
+        </p>
+        <Link to="/signin" className="hero-btn primary">
+          Request Access
+        </Link>
       </section>
 
-      <section id="how-it-works" className="steps">
-        <article>
-          <h3>1. Connect</h3>
-          <p>Tenant admin links their cloud warehouse once and controls access centrally.</p>
-        </article>
-        <article>
-          <h3>2. Ask</h3>
-          <p>Users ask natural language questions with tenant schema context auto-resolved.</p>
-        </article>
-        <article>
-          <h3>3. Decide</h3>
-          <p>Get accurate SQL, complete tables, charts, and graphs in a single workspace.</p>
-        </article>
-      </section>
+      <footer className="home-footer">
+        <strong>KONTEXA</strong>
+        <span>© 2026 Kontexa. All rights reserved.</span>
+      </footer>
     </div>
   );
 }
