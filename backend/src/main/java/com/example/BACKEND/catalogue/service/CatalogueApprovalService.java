@@ -13,7 +13,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Handles client approval / rejection of a catalogue.
@@ -47,7 +51,13 @@ public class CatalogueApprovalService {
      */
     @Transactional
     public ClientCatalogueEntity approve(Long catalogueId) {
+        return approve(catalogueId, null);
+    }
+
+    @Transactional
+    public ClientCatalogueEntity approve(Long catalogueId, String expectedClientId) {
         ClientCatalogueEntity catalogue = findOrThrow(catalogueId);
+        assertClientMatch(catalogue, expectedClientId);
         catalogue.setStatus("APPROVED");
         catalogue.setUpdatedAt(LocalDateTime.now());
         catalogueRepo.save(catalogue);
@@ -70,7 +80,13 @@ public class CatalogueApprovalService {
      */
     @Transactional
     public ClientCatalogueEntity reject(Long catalogueId) {
+        return reject(catalogueId, null);
+    }
+
+    @Transactional
+    public ClientCatalogueEntity reject(Long catalogueId, String expectedClientId) {
         ClientCatalogueEntity catalogue = findOrThrow(catalogueId);
+        assertClientMatch(catalogue, expectedClientId);
         catalogue.setStatus("REJECTED");
         catalogue.setUpdatedAt(LocalDateTime.now());
         return catalogueRepo.save(catalogue);
@@ -81,6 +97,70 @@ public class CatalogueApprovalService {
      */
     public List<ClientCatalogueEntity> listForClient(String clientId) {
         return catalogueRepo.findByClientId(clientId);
+    }
+
+    /**
+     * Tenant-centric listing: resolves catalogues by multiple possible identifiers
+     * (client id, schema name, and common tenant-login prefixes).
+     */
+    public List<ClientCatalogueEntity> listForTenantContext(String tenantId, String tenantSchema) {
+        Set<String> keys = buildLookupKeys(tenantId, tenantSchema);
+        LinkedHashSet<ClientCatalogueEntity> merged = new LinkedHashSet<>();
+        for (String key : keys) {
+            merged.addAll(catalogueRepo.findByClientIdIgnoreCase(key));
+            merged.addAll(catalogueRepo.findBySchemaNameIgnoreCase(key));
+        }
+        return merged.stream()
+                .sorted((a, b) -> b.getCreatedAt().compareTo(a.getCreatedAt()))
+                .toList();
+    }
+
+    public ClientCatalogueEntity getForClient(Long catalogueId, String expectedClientId) {
+        ClientCatalogueEntity catalogue = findOrThrow(catalogueId);
+        assertClientMatch(catalogue, expectedClientId);
+        return catalogue;
+    }
+
+    public ClientCatalogueEntity getForTenantContext(
+            Long catalogueId,
+            String tenantId,
+            String tenantSchema,
+            String explicitClientId
+    ) {
+        ClientCatalogueEntity catalogue = findOrThrow(catalogueId);
+        Set<String> keys = buildLookupKeys(tenantId, tenantSchema);
+        addKeyVariants(keys, explicitClientId);
+        if (keys.isEmpty()) {
+            return catalogue;
+        }
+        for (String key : keys) {
+            if (catalogue.getClientId().equalsIgnoreCase(key) || catalogue.getSchemaName().equalsIgnoreCase(key)) {
+                return catalogue;
+            }
+        }
+        throw new IllegalArgumentException(
+                "Catalogue " + catalogueId + " does not belong to provided tenant context");
+    }
+
+    @Transactional
+    public ClientCatalogueEntity updateFromTenantContext(
+            Long catalogueId,
+            String tenantId,
+            String tenantSchema,
+            String explicitClientId,
+            List<Map<String, Object>> tableUpdates
+    ) {
+        ClientCatalogueEntity catalogue = getForTenantContext(catalogueId, tenantId, tenantSchema, explicitClientId);
+        if (tableUpdates != null) {
+            applyTableUpdates(catalogue, tableUpdates);
+        }
+        catalogue.setUpdatedAt(LocalDateTime.now());
+        ClientCatalogueEntity saved = catalogueRepo.save(catalogue);
+
+        if ("APPROVED".equalsIgnoreCase(saved.getStatus())) {
+            upsertSnapshot(saved);
+        }
+        return saved;
     }
 
     /**
@@ -156,10 +236,95 @@ public class CatalogueApprovalService {
         }
     }
 
+    private void upsertSnapshot(ClientCatalogueEntity catalogue) {
+        CatalogueSnapshotEntity snapshot = snapshotRepo.findByClientId(catalogue.getClientId())
+                .orElseGet(CatalogueSnapshotEntity::new);
+        snapshot.setCatalogueId(catalogue.getId());
+        snapshot.setClientId(catalogue.getClientId());
+        snapshot.setCatalogueJson(serializeCatalogue(catalogue));
+        snapshot.setCreatedAt(LocalDateTime.now());
+        snapshotRepo.save(snapshot);
+    }
+
+    private void applyTableUpdates(ClientCatalogueEntity catalogue, List<Map<String, Object>> tableUpdates) {
+        for (Map<String, Object> t : tableUpdates) {
+            String tableName = str(t.get("tableName"));
+            if (tableName == null) continue;
+            String tableSchema = str(t.get("tableSchema"));
+            CatalogueTableEntity targetTable = catalogue.getTables().stream()
+                    .filter(x -> x.getTableName().equalsIgnoreCase(tableName)
+                            && (tableSchema == null || x.getTableSchema().equalsIgnoreCase(tableSchema)))
+                    .findFirst()
+                    .orElse(null);
+            if (targetTable == null) continue;
+
+            String tableDesc = str(t.get("description"));
+            if (tableDesc != null) {
+                targetTable.setDescription(tableDesc);
+            }
+
+            Object cols = t.get("columns");
+            if (!(cols instanceof List<?> colList)) continue;
+            for (Object obj : colList) {
+                if (!(obj instanceof Map<?, ?> raw)) continue;
+                @SuppressWarnings("unchecked")
+                Map<String, Object> colUpdate = (Map<String, Object>) raw;
+                String colName = str(colUpdate.get("columnName"));
+                if (colName == null) continue;
+                CatalogueColumnEntity targetCol = targetTable.getColumns().stream()
+                        .filter(c -> c.getColumnName().equalsIgnoreCase(colName))
+                        .findFirst()
+                        .orElse(null);
+                if (targetCol == null) continue;
+                String desc = str(colUpdate.get("description"));
+                String role = str(colUpdate.get("role"));
+                if (desc != null) targetCol.setDescription(desc);
+                if (role != null) targetCol.setRole(role);
+            }
+        }
+    }
+
+    private String str(Object value) {
+        if (value == null) return null;
+        return String.valueOf(value);
+    }
+
     private ClientCatalogueEntity findOrThrow(Long id) {
         return catalogueRepo.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Catalogue not found with id: " + id));
+    }
+
+    private Set<String> buildLookupKeys(String tenantId, String tenantSchema) {
+        LinkedHashSet<String> keys = new LinkedHashSet<>();
+        addKeyVariants(keys, tenantId);
+        addKeyVariants(keys, tenantSchema);
+        return keys;
+    }
+
+    private void addKeyVariants(Set<String> keys, String raw) {
+        if (raw == null) return;
+        String base = raw.trim();
+        if (base.isBlank()) return;
+        keys.add(base);
+        keys.add(base.toLowerCase(Locale.ROOT));
+
+        int dash = base.indexOf('-');
+        if (dash > 0) {
+            String prefix = base.substring(0, dash).trim();
+            if (!prefix.isBlank()) {
+                keys.add(prefix);
+                keys.add(prefix.toLowerCase(Locale.ROOT));
+            }
+        }
+    }
+
+    private void assertClientMatch(ClientCatalogueEntity catalogue, String expectedClientId) {
+        if (expectedClientId == null || expectedClientId.isBlank()) return;
+        if (!catalogue.getClientId().equalsIgnoreCase(expectedClientId)) {
+            throw new IllegalArgumentException(
+                    "Catalogue " + catalogue.getId() + " does not belong to client: " + expectedClientId);
+        }
     }
 
 }

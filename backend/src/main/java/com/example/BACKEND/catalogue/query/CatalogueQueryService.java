@@ -2,6 +2,8 @@ package com.example.BACKEND.catalogue.query;
 
 import com.example.BACKEND.catalogue.llm.OpenAiClient;
 import com.example.BACKEND.catalogue.service.CatalogueApprovalService;
+import com.example.BACKEND.tenant.BigQueryConnectorService;
+import com.example.BACKEND.tenant.TenantCloudConnectionService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -31,6 +33,8 @@ public class CatalogueQueryService {
     private final OpenAiClient openAiClient;
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
+    private final TenantCloudConnectionService cloudConnectionService;
+    private final BigQueryConnectorService bigQueryConnectorService;
 
     public CatalogueQueryService(
             CatalogueApprovalService approvalService,
@@ -38,7 +42,9 @@ public class CatalogueQueryService {
             CataloguePromptBuilder promptBuilder,
             OpenAiClient openAiClient,
             JdbcTemplate jdbcTemplate,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            TenantCloudConnectionService cloudConnectionService,
+            BigQueryConnectorService bigQueryConnectorService
     ) {
         this.approvalService = approvalService;
         this.retrieverService = retrieverService;
@@ -46,27 +52,57 @@ public class CatalogueQueryService {
         this.openAiClient = openAiClient;
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
+        this.cloudConnectionService = cloudConnectionService;
+        this.bigQueryConnectorService = bigQueryConnectorService;
     }
 
     public QueryResult ask(String clientId, String question) {
         String snapshotJson = approvalService.getApprovedSnapshot(clientId);
         JsonNode fullNode = parseSnapshot(snapshotJson);
         JsonNode relevantNode = retrieverService.buildRelevantCatalogueSlice(fullNode, question);
+        var bigQueryCfg = cloudConnectionService.getBigQueryConfig(clientId);
+        boolean useBigQuery = bigQueryCfg.isPresent()
+                && bigQueryCfg.get().projectId() != null && !bigQueryCfg.get().projectId().isBlank()
+                && bigQueryCfg.get().dataset() != null && !bigQueryCfg.get().dataset().isBlank()
+                && bigQueryCfg.get().serviceAccountJson() != null && !bigQueryCfg.get().serviceAccountJson().isBlank();
 
         String systemPrompt = promptBuilder.buildSystemPromptFromSnapshot(relevantNode);
+        if (useBigQuery) {
+            systemPrompt += "\nUse BigQuery Standard SQL syntax.";
+        }
         String userPrompt = promptBuilder.buildUserPrompt(question);
         String sql = callLlmForSql(systemPrompt, userPrompt);
 
         sql = injectMissingCategoryFilters(sql, question, fullNode);
         sql = enforceExplicitIntentFilters(sql, question, fullNode);
-        sql = normalizeSchemaQualifiers(sql, clientId, fullNode);
+        sql = useBigQuery
+                ? normalizeBigQueryDatasetQualifiers(sql, bigQueryCfg.get().dataset(), fullNode)
+                : normalizeSchemaQualifiers(sql, clientId, fullNode);
         sql = normalizeYearDateFilters(sql, question, fullNode);
         sql = normalizeDatePredicates(sql, fullNode);
         sql = fixIntegerColumnILike(sql, fullNode);
         sql = fixSemanticColumnMapping(sql, question, fullNode);
+        if (useBigQuery) {
+            sql = normalizeForBigQuery(sql);
+        }
 
-        List<Map<String, Object>> rows = executeQuery(sql);
+        List<Map<String, Object>> rows = useBigQuery
+                ? executeBigQuery(sql, bigQueryCfg.get())
+                : executeQuery(sql);
         return new QueryResult(question, sql, rows);
+    }
+
+    private List<Map<String, Object>> executeBigQuery(
+            String sql,
+            TenantCloudConnectionService.BigQueryConfig cfg
+    ) {
+        return bigQueryConnectorService.executeSelect(
+                cfg.projectId(),
+                cfg.serviceAccountJson(),
+                cfg.location(),
+                cfg.dataset(),
+                sql
+        );
     }
 
     private String callLlmForSql(String systemPrompt, String userPrompt) {
@@ -116,6 +152,41 @@ public class CatalogueQueryService {
         }
         m.appendTail(sb);
         return changed ? sb.toString() : sql;
+    }
+
+    private String normalizeBigQueryDatasetQualifiers(String sql, String dataset, JsonNode catalogueNode) {
+        if (!isFilterableSelect(sql) || dataset == null || dataset.isBlank()) return sql;
+
+        Set<String> tables = new LinkedHashSet<>();
+        for (JsonNode table : catalogueNode.path("tables")) {
+            String tableName = table.path("tableName").asText("");
+            if (!tableName.isBlank()) tables.add(tableName.toLowerCase());
+        }
+
+        Pattern ref = Pattern.compile("(?i)\\b([a-z_][a-z0-9_]*)\\.([a-z_][a-z0-9_]*)\\b");
+        Matcher m = ref.matcher(sql);
+        StringBuffer sb = new StringBuffer();
+        boolean changed = false;
+        while (m.find()) {
+            String maybeSchema = m.group(1);
+            String table = m.group(2);
+            if (!tables.contains(table.toLowerCase()) || maybeSchema.equalsIgnoreCase(dataset)) {
+                m.appendReplacement(sb, Matcher.quoteReplacement(m.group(0)));
+                continue;
+            }
+            m.appendReplacement(sb, Matcher.quoteReplacement(dataset + "." + table));
+            changed = true;
+        }
+        m.appendTail(sb);
+        return changed ? sb.toString() : sql;
+    }
+
+    private String normalizeForBigQuery(String sql) {
+        String out = sql;
+        out = out.replaceAll("(?i)\\bilike\\b", "LIKE");
+        out = out.replaceAll("(?i)\\btrue\\b", "TRUE");
+        out = out.replaceAll("(?i)\\bfalse\\b", "FALSE");
+        return out;
     }
 
     /**

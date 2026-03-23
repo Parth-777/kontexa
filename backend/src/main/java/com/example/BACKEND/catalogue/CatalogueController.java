@@ -1,12 +1,15 @@
 package com.example.BACKEND.catalogue;
 
 import com.example.BACKEND.catalogue.entity.ClientCatalogueEntity;
+import com.example.BACKEND.catalogue.entity.CatalogueTableEntity;
 import com.example.BACKEND.catalogue.model.CatalogueResult;
 import com.example.BACKEND.catalogue.service.CatalogueApprovalService;
 import com.example.BACKEND.catalogue.service.CatalogueEnrichmentService;
 import com.example.BACKEND.catalogue.service.CatalogueStorageService;
 import com.example.BACKEND.catalogue.service.DataSamplerService;
 import com.example.BACKEND.catalogue.service.SchemaDiscoveryService;
+import com.example.BACKEND.catalogue.service.BigQueryCatalogueService;
+import com.example.BACKEND.tenant.TenantCloudConnectionService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -55,17 +58,23 @@ public class CatalogueController {
     private final CatalogueEnrichmentService enrichmentService;
     private final CatalogueStorageService storageService;
     private final CatalogueApprovalService approvalService;
+    private final TenantCloudConnectionService cloudConnectionService;
+    private final BigQueryCatalogueService bigQueryCatalogueService;
 
     public CatalogueController(SchemaDiscoveryService schemaDiscovery,
                                 DataSamplerService dataSampler,
                                 CatalogueEnrichmentService enrichmentService,
                                 CatalogueStorageService storageService,
-                                CatalogueApprovalService approvalService) {
+                                CatalogueApprovalService approvalService,
+                                TenantCloudConnectionService cloudConnectionService,
+                                BigQueryCatalogueService bigQueryCatalogueService) {
         this.schemaDiscovery = schemaDiscovery;
         this.dataSampler = dataSampler;
         this.enrichmentService = enrichmentService;
         this.storageService = storageService;
         this.approvalService = approvalService;
+        this.cloudConnectionService = cloudConnectionService;
+        this.bigQueryCatalogueService = bigQueryCatalogueService;
     }
 
     /**
@@ -76,8 +85,9 @@ public class CatalogueController {
     public ResponseEntity<CatalogueResult> discover(@RequestBody Map<String, String> body) {
         String schema = body.getOrDefault("schema", "public");
         System.out.println("[Catalogue] Starting schema discovery for schema: " + schema);
-
-        CatalogueResult result = schemaDiscovery.discover(schema);
+        CatalogueResult result = resolveCloudConfig(body)
+                .map(cfg -> bigQueryCatalogueService.discover(cfg, false))
+                .orElseGet(() -> schemaDiscovery.discover(schema));
 
         System.out.println("[Catalogue] Discovery complete: "
                 + result.getTotalTables() + " tables, "
@@ -94,12 +104,17 @@ public class CatalogueController {
     public ResponseEntity<CatalogueResult> build(@RequestBody Map<String, String> body) {
         String schema = body.getOrDefault("schema", "public");
         System.out.println("[Catalogue] Starting catalogue build (no enrichment) for schema: " + schema);
-
-        CatalogueResult result = schemaDiscovery.discover(schema);
-        System.out.println("[Catalogue] Stage 1 complete — " + result.getTotalTables() + " tables");
-
-        dataSampler.sample(result);
-        System.out.println("[Catalogue] Stage 2 complete — sampling done");
+        CatalogueResult result;
+        var cloudConfig = resolveCloudConfig(body);
+        if (cloudConfig.isPresent()) {
+            result = bigQueryCatalogueService.discover(cloudConfig.get(), true);
+            System.out.println("[Catalogue] Stage 1+2 complete via BigQuery connector");
+        } else {
+            result = schemaDiscovery.discover(schema);
+            System.out.println("[Catalogue] Stage 1 complete — " + result.getTotalTables() + " tables");
+            dataSampler.sample(result);
+            System.out.println("[Catalogue] Stage 2 complete — sampling done");
+        }
 
         return ResponseEntity.ok(result);
     }
@@ -118,15 +133,21 @@ public class CatalogueController {
         String schema = body.getOrDefault("schema", "public");
         System.out.println("[Catalogue] Starting FULL catalogue build for schema: " + schema);
 
-        // Stage 1: discover structure
-        CatalogueResult result = schemaDiscovery.discover(schema);
-        System.out.println("[Catalogue] Stage 1 complete — "
-                + result.getTotalTables() + " tables, "
-                + result.getTotalColumns() + " columns");
-
-        // Stage 2: sample real values
-        dataSampler.sample(result);
-        System.out.println("[Catalogue] Stage 2 complete — sampling done");
+        CatalogueResult result;
+        var cloudConfig = resolveCloudConfig(body);
+        if (cloudConfig.isPresent()) {
+            result = bigQueryCatalogueService.discover(cloudConfig.get(), true);
+            System.out.println("[Catalogue] Stage 1+2 complete via BigQuery connector — "
+                    + result.getTotalTables() + " tables, "
+                    + result.getTotalColumns() + " columns");
+        } else {
+            result = schemaDiscovery.discover(schema);
+            System.out.println("[Catalogue] Stage 1 complete — "
+                    + result.getTotalTables() + " tables, "
+                    + result.getTotalColumns() + " columns");
+            dataSampler.sample(result);
+            System.out.println("[Catalogue] Stage 2 complete — sampling done");
+        }
 
         // Stage 3: LLM enrichment (descriptions + synonyms + value meanings + roles)
         enrichmentService.enrich(result);
@@ -136,6 +157,24 @@ public class CatalogueController {
         System.out.println("[Catalogue] Full catalogue ready for client review. Status: DRAFT");
 
         return ResponseEntity.ok(result);
+    }
+
+    private java.util.Optional<TenantCloudConnectionService.BigQueryConfig> resolveCloudConfig(Map<String, String> body) {
+        String tenantId = body.getOrDefault("tenantId", "").trim();
+        String clientId = body.getOrDefault("clientId", "").trim();
+        String schema = body.getOrDefault("schema", "").trim();
+        if (!tenantId.isBlank()) {
+            var cfg = cloudConnectionService.getBigQueryConfig(tenantId);
+            if (cfg.isPresent()) return cfg;
+        }
+        if (!clientId.isBlank()) {
+            var cfg = cloudConnectionService.getBigQueryConfig(clientId);
+            if (cfg.isPresent()) return cfg;
+        }
+        if (!schema.isBlank()) {
+            return cloudConnectionService.getBigQueryConfig(schema);
+        }
+        return java.util.Optional.empty();
     }
 
     // ── Approval Flow ────────────────────────────────────────────────────────
@@ -172,8 +211,10 @@ public class CatalogueController {
      * POST /api/catalogue/{id}/approve
      */
     @PostMapping("/{id}/approve")
-    public ResponseEntity<Map<String, Object>> approve(@PathVariable Long id) {
-        ClientCatalogueEntity approved = approvalService.approve(id);
+    public ResponseEntity<Map<String, Object>> approve(
+            @PathVariable Long id,
+            @RequestParam(required = false) String clientId) {
+        ClientCatalogueEntity approved = approvalService.approve(id, clientId);
         System.out.println("[Catalogue] Approved catalogue id=" + id);
         return ResponseEntity.ok(Map.of(
                 "id",     approved.getId(),
@@ -188,8 +229,10 @@ public class CatalogueController {
      * POST /api/catalogue/{id}/reject
      */
     @PostMapping("/{id}/reject")
-    public ResponseEntity<Map<String, Object>> reject(@PathVariable Long id) {
-        ClientCatalogueEntity rejected = approvalService.reject(id);
+    public ResponseEntity<Map<String, Object>> reject(
+            @PathVariable Long id,
+            @RequestParam(required = false) String clientId) {
+        ClientCatalogueEntity rejected = approvalService.reject(id, clientId);
         return ResponseEntity.ok(Map.of(
                 "id",     rejected.getId(),
                 "status", rejected.getStatus()
@@ -202,8 +245,18 @@ public class CatalogueController {
      * GET /api/catalogue/list?clientId=netflix
      */
     @GetMapping("/list")
-    public ResponseEntity<List<Map<String, Object>>> list(@RequestParam String clientId) {
-        List<Map<String, Object>> response = approvalService.listForClient(clientId)
+    public ResponseEntity<List<Map<String, Object>>> list(
+            @RequestParam(required = false) String clientId,
+            @RequestParam(required = false) String tenantId,
+            @RequestParam(required = false) String tenantSchema) {
+        List<ClientCatalogueEntity> catalogues;
+        if (clientId != null && !clientId.isBlank()) {
+            catalogues = approvalService.listForClient(clientId);
+        } else {
+            catalogues = approvalService.listForTenantContext(tenantId, tenantSchema);
+        }
+
+        List<Map<String, Object>> response = catalogues
                 .stream()
                 .map(c -> Map.<String, Object>of(
                         "id",          c.getId(),
@@ -215,5 +268,84 @@ public class CatalogueController {
                 ))
                 .toList();
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Get a single catalogue in preview form so tenant can review before approving.
+     *
+     * GET /api/catalogue/{id}?clientId=netflix
+     */
+    @GetMapping("/{id}")
+    public ResponseEntity<Map<String, Object>> getById(
+            @PathVariable Long id,
+            @RequestParam(required = false) String clientId,
+            @RequestParam(required = false) String tenantId,
+            @RequestParam(required = false) String tenantSchema) {
+        ClientCatalogueEntity c = approvalService.getForTenantContext(id, tenantId, tenantSchema, clientId);
+        long totalColumns = c.getTables().stream().mapToLong(t -> t.getColumns().size()).sum();
+        List<Map<String, Object>> tables = c.getTables().stream()
+                .map(this::toTablePreview)
+                .toList();
+
+        return ResponseEntity.ok(Map.of(
+                "id", c.getId(),
+                "clientId", c.getClientId(),
+                "schemaName", c.getSchemaName(),
+                "databaseName", c.getDatabaseName() == null ? "" : c.getDatabaseName(),
+                "status", c.getStatus(),
+                "tableCount", c.getTables().size(),
+                "columnCount", totalColumns,
+                "createdAt", c.getCreatedAt().toString(),
+                "updatedAt", c.getUpdatedAt().toString(),
+                "tables", tables
+        ));
+    }
+
+    /**
+     * Update catalogue content (table/column descriptions and roles) from tenant review page.
+     *
+     * PUT /api/catalogue/{id}?tenantId=...&tenantSchema=...
+     */
+    @PutMapping("/{id}")
+    public ResponseEntity<Map<String, Object>> updateById(
+            @PathVariable Long id,
+            @RequestParam(required = false) String clientId,
+            @RequestParam(required = false) String tenantId,
+            @RequestParam(required = false) String tenantSchema,
+            @RequestBody Map<String, Object> body) {
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> tables = body.get("tables") instanceof List<?> list
+                ? (List<Map<String, Object>>) list
+                : List.of();
+
+        ClientCatalogueEntity updated = approvalService.updateFromTenantContext(
+                id, tenantId, tenantSchema, clientId, tables
+        );
+        return ResponseEntity.ok(Map.of(
+                "id", updated.getId(),
+                "status", updated.getStatus(),
+                "updatedAt", updated.getUpdatedAt().toString()
+        ));
+    }
+
+    private Map<String, Object> toTablePreview(CatalogueTableEntity table) {
+        List<Map<String, Object>> columns = table.getColumns()
+                .stream()
+                .map(col -> Map.<String, Object>of(
+                        "columnName", col.getColumnName(),
+                        "dataType", col.getDataType() == null ? "" : col.getDataType(),
+                        "description", col.getDescription() == null ? "" : col.getDescription(),
+                        "role", col.getRole() == null ? "" : col.getRole(),
+                        "sampleValues", col.getSampleValues() == null ? "[]" : col.getSampleValues()
+                ))
+                .toList();
+        return Map.of(
+                "tableName", table.getTableName(),
+                "tableSchema", table.getTableSchema(),
+                "description", table.getDescription() == null ? "" : table.getDescription(),
+                "rowCount", table.getRowCount() == null ? 0L : table.getRowCount(),
+                "columnCount", table.getColumns().size(),
+                "columns", columns
+        );
     }
 }

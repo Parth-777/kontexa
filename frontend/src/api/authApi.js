@@ -91,3 +91,49 @@ export async function updateTenantCloudLink({ tenantId, cloudDbLink }) {
   if (!response.ok) throw new Error(payload.error || 'Failed to update cloud database link');
   return payload;
 }
+
+export async function testTenantBigQueryConnection({ projectId, serviceAccountJson, location, dataset }) {
+  const response = await fetch(`${BASE_URL}/api/auth/tenant/bigquery/test-connection`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId, serviceAccountJson, location, dataset }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || 'Failed to test BigQuery connection');
+  return payload;
+}
+
+export async function connectTenantBigQuery({
+  tenantId,
+  projectId,
+  serviceAccountJson,
+  location,
+  dataset,
+}) {
+  const response = await fetch(`${BASE_URL}/api/auth/tenant/bigquery/connect`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tenantId, projectId, serviceAccountJson, location, dataset }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || 'Failed to connect BigQuery');
+  return payload;
+}
+
+export async function fetchTenantBigQueryConfig(tenantId) {
+  const response = await fetch(
+    `${BASE_URL}/api/auth/tenant/bigquery/config?tenantId=${encodeURIComponent(tenantId)}`
+  );
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || 'Failed to load BigQuery config');
+  return payload;
+}
+
+export async function fetchTenantBigQueryTables(tenantId) {
+  const response = await fetch(
+    `${BASE_URL}/api/auth/tenant/bigquery/tables?tenantId=${encodeURIComponent(tenantId)}`
+  );
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || 'Failed to load BigQuery tables');
+  return payload;
+}

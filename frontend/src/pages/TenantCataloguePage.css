@@ -1,0 +1,199 @@
+.tenant-catalogue-page {
+  min-height: 100vh;
+  background: radial-gradient(circle at 20% 10%, #0b1b35 0%, #04070d 48%);
+  color: #f4f8ff;
+  padding-bottom: 2rem;
+}
+
+.tenant-catalogue-header,
+.tenant-catalogue-main {
+  width: min(1200px, 92vw);
+  margin: 0 auto;
+}
+
+.tenant-catalogue-header {
+  padding: 1.1rem 0 0.9rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.tenant-catalogue-brand {
+  color: #f5f9ff;
+  text-decoration: none;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.tenant-catalogue-header p {
+  margin: 0.4rem 0 0;
+  color: #9eafc8;
+}
+
+.tenant-catalogue-header button {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  background: rgba(8, 14, 23, 0.88);
+  color: #dbe6f7;
+  padding: 0.55rem 0.88rem;
+}
+
+.tenant-catalogue-summary {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  background: rgba(10, 16, 28, 0.86);
+  padding: 1rem;
+}
+
+.tenant-catalogue-summary h1 {
+  margin: 0;
+}
+
+.tenant-catalogue-summary-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.tenant-catalogue-actions {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.tenant-catalogue-actions button {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  background: rgba(8, 14, 23, 0.88);
+  color: #dbe6f7;
+  padding: 0.45rem 0.76rem;
+}
+
+.tenant-catalogue-summary p {
+  margin: 0.55rem 0 0;
+  color: #9dafc9;
+}
+
+.tenant-catalogue-summary input {
+  margin-top: 0.85rem;
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+  background: rgba(5, 12, 22, 0.84);
+  color: #f2f6ff;
+  padding: 0.68rem 0.8rem;
+}
+
+.tenant-catalogue-feedback {
+  margin-top: 0.55rem;
+  color: #90f6e9;
+}
+
+.tenant-catalogue-tables {
+  margin-top: 1rem;
+  display: grid;
+  gap: 0.85rem;
+}
+
+.tenant-catalogue-table-card {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  background: rgba(10, 16, 28, 0.86);
+  padding: 0.9rem;
+}
+
+.table-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.table-head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.table-head span {
+  border: 1px solid rgba(29, 233, 212, 0.45);
+  border-radius: 999px;
+  color: #8ef4e8;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.78rem;
+}
+
+.tenant-catalogue-table-card > p {
+  margin: 0.5rem 0 0.7rem;
+  color: #9caec9;
+}
+
+.table-desc-input {
+  width: 100%;
+  margin: 0.5rem 0 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  background: rgba(5, 12, 22, 0.84);
+  color: #f2f6ff;
+  padding: 0.55rem 0.62rem;
+  resize: vertical;
+}
+
+.column-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.column-item {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(7, 13, 24, 0.84);
+  padding: 0.55rem 0.62rem;
+}
+
+.column-item strong {
+  display: block;
+}
+
+.column-item small {
+  color: #8ea4c3;
+}
+
+.column-item p {
+  margin: 0.35rem 0 0;
+  color: #9aadc8;
+  font-size: 0.86rem;
+}
+
+.column-item textarea,
+.column-role-input {
+  width: 100%;
+  margin-top: 0.38rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 9px;
+  background: rgba(5, 12, 22, 0.84);
+  color: #edf4ff;
+  padding: 0.44rem 0.56rem;
+}
+
+.column-item textarea {
+  resize: vertical;
+}
+
+.column-role {
+  display: block;
+  margin-top: 0.32rem;
+  color: #8fb5e2;
+  font-size: 0.8rem;
+}
+
+.tenant-catalogue-error {
+  color: #ffb2b2;
+}
+
+@media (max-width: 900px) {
+  .column-list {
+    grid-template-columns: 1fr;
+  }
+}

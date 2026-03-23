@@ -11,6 +11,8 @@ import java.util.Optional;
 public interface ClientCatalogueRepository extends JpaRepository<ClientCatalogueEntity, Long> {
 
     List<ClientCatalogueEntity> findByClientId(String clientId);
+    List<ClientCatalogueEntity> findByClientIdIgnoreCase(String clientId);
+    List<ClientCatalogueEntity> findBySchemaNameIgnoreCase(String schemaName);
 
     Optional<ClientCatalogueEntity> findByClientIdAndStatus(String clientId, String status);
 }

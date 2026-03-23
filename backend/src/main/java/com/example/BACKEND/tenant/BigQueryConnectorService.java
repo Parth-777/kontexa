@@ -5,14 +5,21 @@ import com.google.auth.oauth2.ServiceAccountCredentials;
 import com.google.cloud.bigquery.BigQuery;
 import com.google.cloud.bigquery.BigQueryException;
 import com.google.cloud.bigquery.BigQueryOptions;
+import com.google.cloud.bigquery.DatasetId;
 import com.google.cloud.bigquery.FieldValueList;
 import com.google.cloud.bigquery.QueryJobConfiguration;
+import com.google.cloud.bigquery.Table;
+import com.google.cloud.bigquery.TableId;
 import com.google.cloud.bigquery.TableResult;
 import org.springframework.stereotype.Service;
 
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 @Service
 public class BigQueryConnectorService {
@@ -78,6 +85,98 @@ public class BigQueryConnectorService {
             sb.append("dataset=").append(dataset.trim());
         }
         return sb.toString();
+    }
+
+    public List<String> listTables(
+            String projectId,
+            String serviceAccountJson,
+            String location,
+            String dataset
+    ) {
+        String normalizedProject = require(projectId, "projectId");
+        String normalizedCreds = require(serviceAccountJson, "serviceAccountJson");
+        String normalizedDataset = require(dataset, "dataset");
+        String normalizedLocation = normalize(location);
+
+        BigQuery bigQuery = createClient(normalizedProject, normalizedCreds, normalizedLocation);
+        DatasetId datasetId = DatasetId.of(normalizedProject, normalizedDataset);
+        List<String> tables = new ArrayList<>();
+
+        try {
+            for (Table table : bigQuery.listTables(datasetId).iterateAll()) {
+                if (table != null && table.getTableId() != null && table.getTableId().getTable() != null) {
+                    tables.add(table.getTableId().getTable());
+                }
+            }
+            return tables;
+        } catch (BigQueryException ex) {
+            throw new RuntimeException("Failed to list BigQuery tables: " + ex.getMessage(), ex);
+        }
+    }
+
+    public List<Map<String, Object>> executeSelect(
+            String projectId,
+            String serviceAccountJson,
+            String location,
+            String dataset,
+            String sql
+    ) {
+        String normalizedProject = require(projectId, "projectId");
+        String normalizedCreds = require(serviceAccountJson, "serviceAccountJson");
+        String normalizedSql = require(sql, "sql");
+        String normalizedLocation = normalize(location);
+        String normalizedDataset = normalize(dataset);
+
+        BigQuery bigQuery = createClient(normalizedProject, normalizedCreds, normalizedLocation);
+        QueryJobConfiguration.Builder builder = QueryJobConfiguration.newBuilder(normalizedSql)
+                .setUseLegacySql(false);
+        if (normalizedDataset != null) {
+            builder.setDefaultDataset(DatasetId.of(normalizedProject, normalizedDataset));
+        }
+        QueryJobConfiguration queryConfig = builder.build();
+
+        try {
+            TableResult result = bigQuery.query(queryConfig);
+            List<Map<String, Object>> rows = new ArrayList<>();
+            for (FieldValueList row : result.iterateAll()) {
+                Map<String, Object> mapped = new LinkedHashMap<>();
+                if (result.getSchema() != null && result.getSchema().getFields() != null) {
+                    for (int i = 0; i < result.getSchema().getFields().size(); i++) {
+                        String col = result.getSchema().getFields().get(i).getName();
+                        mapped.put(col, row.get(i).isNull() ? null : row.get(i).getValue());
+                    }
+                }
+                rows.add(mapped);
+            }
+            return rows;
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("BigQuery query interrupted", ex);
+        } catch (BigQueryException ex) {
+            throw new RuntimeException("BigQuery execution failed: " + ex.getMessage(), ex);
+        }
+    }
+
+    public com.google.cloud.bigquery.Table getTable(
+            String projectId,
+            String serviceAccountJson,
+            String location,
+            String dataset,
+            String tableName
+    ) {
+        BigQuery bigQuery = createClient(require(projectId, "projectId"), require(serviceAccountJson, "serviceAccountJson"), normalize(location));
+        return bigQuery.getTable(TableId.of(projectId, require(dataset, "dataset"), require(tableName, "tableName")));
+    }
+
+    private BigQuery createClient(String projectId, String serviceAccountJson, String location) {
+        GoogleCredentials credentials = parseCredentials(serviceAccountJson);
+        BigQueryOptions.Builder optionsBuilder = BigQueryOptions.newBuilder()
+                .setProjectId(projectId)
+                .setCredentials(credentials);
+        if (location != null) {
+            optionsBuilder.setLocation(location);
+        }
+        return optionsBuilder.build().getService();
     }
 
     private GoogleCredentials parseCredentials(String serviceAccountPayload) {

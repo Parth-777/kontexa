@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import HomePage from './pages/HomePage';
 import SignInPage from './pages/SignInPage';
+import TenantCataloguePage from './pages/TenantCataloguePage';
 import TenantDashboardPage from './pages/TenantDashboardPage';
 import UserDashboardPage from './pages/UserDashboardPage';
 import './App.css';
@@ -35,6 +36,14 @@ function App() {
         element={
           <RequireTenantAuth>
             <TenantDashboardPage />
+          </RequireTenantAuth>
+        }
+      />
+      <Route
+        path="/tenant/catalogue/:catalogueId"
+        element={
+          <RequireTenantAuth>
+            <TenantCataloguePage />
           </RequireTenantAuth>
         }
       />

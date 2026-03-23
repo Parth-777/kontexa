@@ -123,6 +123,7 @@
 
 .tenant-search,
 .tenant-card input,
+.tenant-card textarea,
 .tenant-card select {
   width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.16);
@@ -130,6 +131,11 @@
   background: rgba(5, 12, 22, 0.82);
   color: #f2f6ff;
   padding: 0.68rem 0.8rem;
+}
+
+.tenant-card textarea {
+  resize: vertical;
+  min-height: 120px;
 }
 
 .tenant-filters {
@@ -202,6 +208,309 @@ td {
 
 .tenant-error {
   color: #ffb2b2;
+}
+
+.catalogue-card {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.catalogue-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.catalogue-card-head h2 {
+  margin: 0;
+}
+
+.catalogue-card-head p {
+  margin: 0.4rem 0 0;
+  color: #9eafc8;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.catalogue-generate-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.catalogue-generate-row button {
+  border: 1px solid rgba(29, 233, 212, 0.52);
+  border-radius: 10px;
+  padding: 0.5rem 0.78rem;
+  background: rgba(8, 24, 33, 0.9);
+  color: #95f8ed;
+  font-weight: 700;
+}
+
+.catalogue-generate-row button:disabled {
+  opacity: 0.58;
+}
+
+.catalogue-generate-row small {
+  color: #94a9c6;
+}
+
+.catalogue-list-wrap {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(5, 11, 20, 0.72);
+  padding: 0.6rem;
+}
+
+.catalogue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.52rem;
+}
+
+.catalogue-list li {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 0.58rem;
+  display: grid;
+  gap: 0.46rem;
+  background: rgba(7, 13, 24, 0.82);
+}
+
+.catalogue-list li > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.catalogue-list li > div:first-child strong {
+  color: #ecf3ff;
+}
+
+.catalogue-list li > div:first-child span {
+  color: #9eb2ce;
+  font-size: 0.85rem;
+}
+
+.catalogue-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.catalogue-meta small {
+  color: #91a6c4;
+}
+
+.catalogue-status {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  font-style: normal;
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.26rem 0.54rem;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.catalogue-status.approved {
+  border-color: rgba(29, 233, 212, 0.5);
+  color: #8cf4e8;
+  background: rgba(29, 233, 212, 0.12);
+}
+
+.catalogue-status.draft {
+  border-color: rgba(255, 210, 111, 0.48);
+  color: #ffd98c;
+  background: rgba(255, 203, 99, 0.12);
+}
+
+.catalogue-status.rejected {
+  border-color: rgba(255, 141, 141, 0.5);
+  color: #ffb0b0;
+  background: rgba(255, 120, 120, 0.12);
+}
+
+.catalogue-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.catalogue-actions button,
+.catalogue-card-head button {
+  border: 1px solid rgba(255, 255, 255, 0.17);
+  border-radius: 9px;
+  padding: 0.42rem 0.62rem;
+  background: rgba(8, 14, 23, 0.88);
+  color: #dce7f9;
+  font-weight: 600;
+}
+
+.catalogue-actions button:disabled,
+.catalogue-card-head button:disabled {
+  opacity: 0.58;
+}
+
+.catalogue-actions button:nth-child(2) {
+  border-color: rgba(29, 233, 212, 0.46);
+  color: #8ef5e8;
+}
+
+.catalogue-actions button:nth-child(3) {
+  border-color: rgba(255, 145, 145, 0.46);
+  color: #ffb2b2;
+}
+
+.catalogue-preview {
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 12px;
+  background: rgba(6, 12, 22, 0.72);
+  padding: 0.68rem;
+}
+
+.catalogue-preview h3 {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.catalogue-preview h3 span {
+  font-size: 0.75rem;
+  color: #98abc6;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  padding: 0.2rem 0.5rem;
+}
+
+.catalogue-preview p {
+  margin: 0.48rem 0 0.62rem;
+  color: #9eb2ce;
+  line-height: 1.45;
+}
+
+.catalogue-preview-tables {
+  display: grid;
+  gap: 0.46rem;
+}
+
+.catalogue-preview-tables article {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(8, 14, 25, 0.8);
+  padding: 0.5rem 0.6rem;
+}
+
+.catalogue-preview-tables strong {
+  display: block;
+  color: #ecf4ff;
+}
+
+.catalogue-preview-tables small {
+  color: #8da4c4;
+  display: block;
+  margin-top: 0.18rem;
+}
+
+.catalogue-preview-tables p {
+  margin: 0.35rem 0 0;
+  color: #94a9c7;
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.cloud-link-card h3 {
+  margin: 0 0 0.2rem;
+  font-size: 1.22rem;
+}
+
+.connector-help {
+  margin: 0.4rem 0 0.8rem;
+  color: #9eb2ce;
+  line-height: 1.4;
+  font-size: 0.9rem;
+}
+
+.bigquery-status {
+  border: 1px solid rgba(29, 233, 212, 0.24);
+  border-radius: 10px;
+  background: rgba(8, 26, 29, 0.32);
+  padding: 0.6rem 0.68rem;
+  margin-bottom: 0.75rem;
+}
+
+.bigquery-status p {
+  margin: 0.25rem 0;
+  color: #bcd1ec;
+  line-height: 1.35;
+}
+
+.bigquery-load-btn {
+  margin-top: 0.55rem;
+  border: 1px solid rgba(29, 233, 212, 0.46);
+  border-radius: 10px;
+  padding: 0.5rem 0.75rem;
+  background: rgba(8, 24, 33, 0.9);
+  color: #9bf9ef;
+  font-weight: 600;
+}
+
+.bigquery-load-btn:disabled {
+  opacity: 0.6;
+}
+
+.bigquery-table-list {
+  margin-top: 0.78rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(7, 13, 24, 0.8);
+  padding: 0.58rem 0.68rem;
+}
+
+.bigquery-table-list h4 {
+  margin: 0;
+  font-size: 0.92rem;
+}
+
+.bigquery-table-list ul {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.28rem;
+}
+
+.bigquery-table-list li {
+  color: #9fc6f1;
+  font-size: 0.9rem;
+}
+
+.bigquery-actions {
+  display: flex;
+  gap: 0.45rem;
+  margin-top: 0.7rem;
+  flex-wrap: wrap;
+}
+
+.bigquery-actions button {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  padding: 0.58rem 0.8rem;
+  background: rgba(8, 14, 23, 0.9);
+  color: #dce8fa;
+  font-weight: 600;
+}
+
+.bigquery-actions button:last-child {
+  border-color: rgba(29, 233, 212, 0.48);
+  color: #8ff6ea;
 }
 
 @media (max-width: 1000px) {
