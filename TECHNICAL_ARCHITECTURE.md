@@ -577,6 +577,6 @@ Cloud Provider (AWS/GCP)
 ---
 
 **Document Version**: 1.0  
-**Last Updated**: 2024
+**Last Updated**: 2026
 
 

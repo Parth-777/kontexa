@@ -3,6 +3,7 @@ package com.example.BACKEND.catalogue.query;
 import com.example.BACKEND.catalogue.llm.OpenAiClient;
 import com.example.BACKEND.catalogue.service.CatalogueApprovalService;
 import com.example.BACKEND.tenant.BigQueryConnectorService;
+import com.example.BACKEND.tenant.SnowflakeConnectorService;
 import com.example.BACKEND.tenant.TenantCloudConnectionService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -35,6 +36,7 @@ public class CatalogueQueryService {
     private final ObjectMapper objectMapper;
     private final TenantCloudConnectionService cloudConnectionService;
     private final BigQueryConnectorService bigQueryConnectorService;
+    private final SnowflakeConnectorService snowflakeConnectorService;
 
     public CatalogueQueryService(
             CatalogueApprovalService approvalService,
@@ -44,7 +46,8 @@ public class CatalogueQueryService {
             JdbcTemplate jdbcTemplate,
             ObjectMapper objectMapper,
             TenantCloudConnectionService cloudConnectionService,
-            BigQueryConnectorService bigQueryConnectorService
+            BigQueryConnectorService bigQueryConnectorService,
+            SnowflakeConnectorService snowflakeConnectorService
     ) {
         this.approvalService = approvalService;
         this.retrieverService = retrieverService;
@@ -54,41 +57,61 @@ public class CatalogueQueryService {
         this.objectMapper = objectMapper;
         this.cloudConnectionService = cloudConnectionService;
         this.bigQueryConnectorService = bigQueryConnectorService;
+        this.snowflakeConnectorService = snowflakeConnectorService;
     }
 
     public QueryResult ask(String clientId, String question) {
         String snapshotJson = approvalService.getApprovedSnapshot(clientId);
         JsonNode fullNode = parseSnapshot(snapshotJson);
         JsonNode relevantNode = retrieverService.buildRelevantCatalogueSlice(fullNode, question);
-        var bigQueryCfg = cloudConnectionService.getBigQueryConfig(clientId);
+
+        String provider = cloudConnectionService.getProvider(clientId);
+
+        var bigQueryCfg  = "bigquery".equals(provider)  ? cloudConnectionService.getBigQueryConfig(clientId)  : java.util.Optional.<TenantCloudConnectionService.BigQueryConfig>empty();
+        var snowflakeCfg = "snowflake".equals(provider) ? cloudConnectionService.getSnowflakeConfig(clientId) : java.util.Optional.<TenantCloudConnectionService.SnowflakeConfig>empty();
+
         boolean useBigQuery = bigQueryCfg.isPresent()
-                && bigQueryCfg.get().projectId() != null && !bigQueryCfg.get().projectId().isBlank()
-                && bigQueryCfg.get().dataset() != null && !bigQueryCfg.get().dataset().isBlank()
-                && bigQueryCfg.get().serviceAccountJson() != null && !bigQueryCfg.get().serviceAccountJson().isBlank();
+                && notBlank(bigQueryCfg.get().projectId())
+                && notBlank(bigQueryCfg.get().dataset())
+                && notBlank(bigQueryCfg.get().serviceAccountJson());
+
+        boolean useSnowflake = snowflakeCfg.isPresent()
+                && notBlank(snowflakeCfg.get().account())
+                && notBlank(snowflakeCfg.get().database())
+                && notBlank(snowflakeCfg.get().username());
 
         String systemPrompt = promptBuilder.buildSystemPromptFromSnapshot(relevantNode);
-        if (useBigQuery) {
-            systemPrompt += "\nUse BigQuery Standard SQL syntax.";
-        }
+        if (useBigQuery)  systemPrompt += "\nUse BigQuery Standard SQL syntax.";
+        if (useSnowflake) systemPrompt += "\nUse Snowflake SQL syntax (standard ANSI SQL). Schema and table names may be uppercase. Do not use BigQuery-specific syntax.";
+
         String userPrompt = promptBuilder.buildUserPrompt(question);
         String sql = callLlmForSql(systemPrompt, userPrompt);
 
         sql = injectMissingCategoryFilters(sql, question, fullNode);
         sql = enforceExplicitIntentFilters(sql, question, fullNode);
-        sql = useBigQuery
-                ? normalizeBigQueryDatasetQualifiers(sql, bigQueryCfg.get().dataset(), fullNode)
-                : normalizeSchemaQualifiers(sql, clientId, fullNode);
+
+        if (useBigQuery) {
+            sql = normalizeBigQueryDatasetQualifiers(sql, bigQueryCfg.get().dataset(), fullNode);
+        } else if (useSnowflake) {
+            sql = normalizeSchemaQualifiers(sql, snowflakeCfg.get().schema(), fullNode);
+        } else {
+            sql = normalizeSchemaQualifiers(sql, clientId, fullNode);
+        }
+
         sql = normalizeYearDateFilters(sql, question, fullNode);
         sql = normalizeDatePredicates(sql, fullNode);
         sql = fixIntegerColumnILike(sql, fullNode);
         sql = fixSemanticColumnMapping(sql, question, fullNode);
-        if (useBigQuery) {
-            sql = normalizeForBigQuery(sql);
-        }
+        if (useBigQuery) sql = normalizeForBigQuery(sql);
 
-        List<Map<String, Object>> rows = useBigQuery
-                ? executeBigQuery(sql, bigQueryCfg.get())
-                : executeQuery(sql);
+        List<Map<String, Object>> rows;
+        if (useBigQuery) {
+            rows = executeBigQuery(sql, bigQueryCfg.get());
+        } else if (useSnowflake) {
+            rows = executeSnowflake(sql, snowflakeCfg.get());
+        } else {
+            rows = executeQuery(sql);
+        }
         return new QueryResult(question, sql, rows);
     }
 
@@ -103,6 +126,20 @@ public class CatalogueQueryService {
                 cfg.dataset(),
                 sql
         );
+    }
+
+    private List<Map<String, Object>> executeSnowflake(
+            String sql,
+            TenantCloudConnectionService.SnowflakeConfig cfg
+    ) {
+        return snowflakeConnectorService.executeSelect(
+                cfg.account(), cfg.warehouse(), cfg.database(),
+                cfg.schema(), cfg.username(), cfg.password(), sql
+        );
+    }
+
+    private boolean notBlank(String value) {
+        return value != null && !value.isBlank();
     }
 
     private String callLlmForSql(String systemPrompt, String userPrompt) {

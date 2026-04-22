@@ -9,6 +9,7 @@ import com.example.BACKEND.catalogue.service.CatalogueStorageService;
 import com.example.BACKEND.catalogue.service.DataSamplerService;
 import com.example.BACKEND.catalogue.service.SchemaDiscoveryService;
 import com.example.BACKEND.catalogue.service.BigQueryCatalogueService;
+import com.example.BACKEND.catalogue.service.SnowflakeCatalogueService;
 import com.example.BACKEND.tenant.TenantCloudConnectionService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -60,6 +61,7 @@ public class CatalogueController {
     private final CatalogueApprovalService approvalService;
     private final TenantCloudConnectionService cloudConnectionService;
     private final BigQueryCatalogueService bigQueryCatalogueService;
+    private final SnowflakeCatalogueService snowflakeCatalogueService;
 
     public CatalogueController(SchemaDiscoveryService schemaDiscovery,
                                 DataSamplerService dataSampler,
@@ -67,7 +69,8 @@ public class CatalogueController {
                                 CatalogueStorageService storageService,
                                 CatalogueApprovalService approvalService,
                                 TenantCloudConnectionService cloudConnectionService,
-                                BigQueryCatalogueService bigQueryCatalogueService) {
+                                BigQueryCatalogueService bigQueryCatalogueService,
+                                SnowflakeCatalogueService snowflakeCatalogueService) {
         this.schemaDiscovery = schemaDiscovery;
         this.dataSampler = dataSampler;
         this.enrichmentService = enrichmentService;
@@ -75,6 +78,7 @@ public class CatalogueController {
         this.approvalService = approvalService;
         this.cloudConnectionService = cloudConnectionService;
         this.bigQueryCatalogueService = bigQueryCatalogueService;
+        this.snowflakeCatalogueService = snowflakeCatalogueService;
     }
 
     /**
@@ -85,8 +89,8 @@ public class CatalogueController {
     public ResponseEntity<CatalogueResult> discover(@RequestBody Map<String, String> body) {
         String schema = body.getOrDefault("schema", "public");
         System.out.println("[Catalogue] Starting schema discovery for schema: " + schema);
-        CatalogueResult result = resolveCloudConfig(body)
-                .map(cfg -> bigQueryCatalogueService.discover(cfg, false))
+        CatalogueResult result = resolveCloud(body)
+                .map(cc -> discoverFromCloud(cc, false))
                 .orElseGet(() -> schemaDiscovery.discover(schema));
 
         System.out.println("[Catalogue] Discovery complete: "
@@ -105,17 +109,16 @@ public class CatalogueController {
         String schema = body.getOrDefault("schema", "public");
         System.out.println("[Catalogue] Starting catalogue build (no enrichment) for schema: " + schema);
         CatalogueResult result;
-        var cloudConfig = resolveCloudConfig(body);
-        if (cloudConfig.isPresent()) {
-            result = bigQueryCatalogueService.discover(cloudConfig.get(), true);
-            System.out.println("[Catalogue] Stage 1+2 complete via BigQuery connector");
+        var cloud = resolveCloud(body);
+        if (cloud.isPresent()) {
+            result = discoverFromCloud(cloud.get(), true);
+            System.out.println("[Catalogue] Stage 1+2 complete via " + cloud.get().provider() + " connector");
         } else {
             result = schemaDiscovery.discover(schema);
             System.out.println("[Catalogue] Stage 1 complete — " + result.getTotalTables() + " tables");
             dataSampler.sample(result);
             System.out.println("[Catalogue] Stage 2 complete — sampling done");
         }
-
         return ResponseEntity.ok(result);
     }
 
@@ -134,10 +137,10 @@ public class CatalogueController {
         System.out.println("[Catalogue] Starting FULL catalogue build for schema: " + schema);
 
         CatalogueResult result;
-        var cloudConfig = resolveCloudConfig(body);
-        if (cloudConfig.isPresent()) {
-            result = bigQueryCatalogueService.discover(cloudConfig.get(), true);
-            System.out.println("[Catalogue] Stage 1+2 complete via BigQuery connector — "
+        var cloud = resolveCloud(body);
+        if (cloud.isPresent()) {
+            result = discoverFromCloud(cloud.get(), true);
+            System.out.println("[Catalogue] Stage 1+2 complete via " + cloud.get().provider() + " connector — "
                     + result.getTotalTables() + " tables, "
                     + result.getTotalColumns() + " columns");
         } else {
@@ -149,32 +152,49 @@ public class CatalogueController {
             System.out.println("[Catalogue] Stage 2 complete — sampling done");
         }
 
-        // Stage 3: LLM enrichment (descriptions + synonyms + value meanings + roles)
         enrichmentService.enrich(result);
         System.out.println("[Catalogue] Stage 3 complete — LLM enrichment done");
-
         result.setStatus("DRAFT");
         System.out.println("[Catalogue] Full catalogue ready for client review. Status: DRAFT");
 
         return ResponseEntity.ok(result);
     }
 
-    private java.util.Optional<TenantCloudConnectionService.BigQueryConfig> resolveCloudConfig(Map<String, String> body) {
-        String tenantId = body.getOrDefault("tenantId", "").trim();
-        String clientId = body.getOrDefault("clientId", "").trim();
-        String schema = body.getOrDefault("schema", "").trim();
-        if (!tenantId.isBlank()) {
-            var cfg = cloudConnectionService.getBigQueryConfig(tenantId);
-            if (cfg.isPresent()) return cfg;
-        }
-        if (!clientId.isBlank()) {
-            var cfg = cloudConnectionService.getBigQueryConfig(clientId);
-            if (cfg.isPresent()) return cfg;
-        }
-        if (!schema.isBlank()) {
-            return cloudConnectionService.getBigQueryConfig(schema);
+    // ── Cloud routing helpers ─────────────────────────────────────────────────
+
+    /** Opaque wrapper so discover/build endpoints don't need to know the provider. */
+    private record CloudConnectorConfig(
+            String provider,
+            TenantCloudConnectionService.BigQueryConfig bigQuery,
+            TenantCloudConnectionService.SnowflakeConfig snowflake
+    ) {}
+
+    private java.util.Optional<CloudConnectorConfig> resolveCloud(Map<String, String> body) {
+        for (String key : List.of(
+                body.getOrDefault("tenantId", ""),
+                body.getOrDefault("clientId", ""),
+                body.getOrDefault("schema", "")
+        )) {
+            if (key.isBlank()) continue;
+            String provider = cloudConnectionService.getProvider(key);
+            if ("bigquery".equals(provider)) {
+                return cloudConnectionService.getBigQueryConfig(key)
+                        .map(cfg -> new CloudConnectorConfig("bigquery", cfg, null));
+            }
+            if ("snowflake".equals(provider)) {
+                return cloudConnectionService.getSnowflakeConfig(key)
+                        .map(cfg -> new CloudConnectorConfig("snowflake", null, cfg));
+            }
         }
         return java.util.Optional.empty();
+    }
+
+    private CatalogueResult discoverFromCloud(CloudConnectorConfig cc, boolean withSampling) {
+        return switch (cc.provider()) {
+            case "bigquery"  -> bigQueryCatalogueService.discover(cc.bigQuery(),   withSampling);
+            case "snowflake" -> snowflakeCatalogueService.discover(cc.snowflake(), withSampling);
+            default -> throw new IllegalStateException("Unknown cloud provider: " + cc.provider());
+        };
     }
 
     // ── Approval Flow ────────────────────────────────────────────────────────

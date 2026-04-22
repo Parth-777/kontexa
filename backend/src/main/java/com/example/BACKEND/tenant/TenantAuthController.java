@@ -17,15 +17,18 @@ public class TenantAuthController {
 
     private final TenantAuthService tenantAuthService;
     private final BigQueryConnectorService bigQueryConnectorService;
+    private final SnowflakeConnectorService snowflakeConnectorService;
     private final ObjectMapper objectMapper;
 
     public TenantAuthController(
             TenantAuthService tenantAuthService,
             BigQueryConnectorService bigQueryConnectorService,
+            SnowflakeConnectorService snowflakeConnectorService,
             ObjectMapper objectMapper
     ) {
         this.tenantAuthService = tenantAuthService;
         this.bigQueryConnectorService = bigQueryConnectorService;
+        this.snowflakeConnectorService = snowflakeConnectorService;
         this.objectMapper = objectMapper;
     }
 
@@ -212,6 +215,205 @@ public class TenantAuthController {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", ex.getMessage()));
         }
     }
+
+    // ── Snowflake connector endpoints ─────────────────────────────────────────
+
+    @PostMapping("/snowflake/test-connection")
+    public ResponseEntity<?> testSnowflakeConnection(@RequestBody Map<String, Object> body) {
+        try {
+            SnowflakeConnectorService.SnowflakeTestResult result = snowflakeConnectorService.testConnection(
+                    getAsString(body, "account"),
+                    getAsString(body, "warehouse"),
+                    getAsString(body, "database"),
+                    getAsString(body, "schema"),
+                    getAsString(body, "username"),
+                    getAsString(body, "password")
+            );
+            return ResponseEntity.ok(Map.of(
+                    "connected",      true,
+                    "connectionLink", result.connectionLink(),
+                    "account",        result.account(),
+                    "warehouse",      result.warehouse(),
+                    "database",       result.database(),
+                    "schema",         result.schema()
+            ));
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
+        } catch (RuntimeException ex) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", ex.getMessage()));
+        }
+    }
+
+    @PostMapping("/snowflake/connect")
+    public ResponseEntity<?> connectSnowflake(@RequestBody Map<String, Object> body) {
+        String tenantId = getAsString(body, "tenantId");
+        if (tenantId == null || tenantId.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "tenantId is required"));
+        }
+        try {
+            SnowflakeConnectorService.SnowflakeTestResult result = snowflakeConnectorService.testConnection(
+                    getAsString(body, "account"),
+                    getAsString(body, "warehouse"),
+                    getAsString(body, "database"),
+                    getAsString(body, "schema"),
+                    getAsString(body, "username"),
+                    getAsString(body, "password")
+            );
+            String configJson = buildSnowflakeConfigJson(
+                    result.account(),
+                    result.warehouse(),
+                    result.database(),
+                    result.schema(),
+                    getAsString(body, "username"),
+                    getAsString(body, "password"),
+                    result.connectionLink()
+            );
+            tenantAuthService.updateCloudDbLink(tenantId, configJson);
+            return ResponseEntity.ok(Map.of(
+                    "message",            "Snowflake connection verified and saved",
+                    "tenantId",           tenantId.trim(),
+                    "provider",           "snowflake",
+                    "account",            result.account(),
+                    "warehouse",          result.warehouse(),
+                    "database",           result.database(),
+                    "schema",             result.schema(),
+                    "connectionLink",     result.connectionLink(),
+                    "credentialsStored",  true
+            ));
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
+        } catch (RuntimeException ex) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", ex.getMessage()));
+        }
+    }
+
+    @GetMapping("/snowflake/config")
+    public ResponseEntity<?> getSnowflakeConfig(@RequestParam String tenantId) {
+        if (tenantId == null || tenantId.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "tenantId is required"));
+        }
+        try {
+            return tenantAuthService.getCloudDbLink(tenantId)
+                    .<ResponseEntity<?>>map(this::toSnowflakeConfigResponse)
+                    .orElseGet(() -> ResponseEntity.ok(Map.of("connected", false, "provider", "snowflake")));
+        } catch (IllegalStateException ex) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of("error", ex.getMessage()));
+        }
+    }
+
+    @GetMapping("/snowflake/tables")
+    public ResponseEntity<?> listSnowflakeTables(@RequestParam String tenantId) {
+        if (tenantId == null || tenantId.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "tenantId is required"));
+        }
+        try {
+            Optional<String> rawConfigOpt = tenantAuthService.getCloudDbLink(tenantId);
+            if (rawConfigOpt.isEmpty() || rawConfigOpt.get().isBlank()) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(Map.of("error", "No Snowflake connector configured for this tenant"));
+            }
+            StoredSnowflakeConfig cfg = parseStoredSnowflakeConfig(rawConfigOpt.get());
+            List<String> tables = snowflakeConnectorService.listTables(
+                    cfg.account(), cfg.warehouse(), cfg.database(), cfg.schema(), cfg.username(), cfg.password()
+            );
+            return ResponseEntity.ok(Map.of(
+                    "connected",   true,
+                    "provider",    "snowflake",
+                    "account",     cfg.account(),
+                    "warehouse",   cfg.warehouse(),
+                    "database",    cfg.database(),
+                    "schema",      cfg.schema(),
+                    "tables",      tables,
+                    "tableCount",  tables.size()
+            ));
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
+        } catch (RuntimeException ex) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", ex.getMessage()));
+        }
+    }
+
+    // ── Snowflake helpers ─────────────────────────────────────────────────────
+
+    private String buildSnowflakeConfigJson(
+            String account, String warehouse, String database, String schema,
+            String username, String password, String connectionLink
+    ) {
+        try {
+            ObjectNode root = objectMapper.createObjectNode();
+            root.put("provider",       "snowflake");
+            root.put("account",        account    == null ? "" : account);
+            root.put("warehouse",      warehouse  == null ? "" : warehouse);
+            root.put("database",       database   == null ? "" : database);
+            root.put("schema",         schema     == null ? "PUBLIC" : schema);
+            root.put("username",       username   == null ? "" : username);
+            root.put("password",       password   == null ? "" : password);
+            root.put("connectionLink", connectionLink == null ? "" : connectionLink);
+            return objectMapper.writeValueAsString(root);
+        } catch (JsonProcessingException ex) {
+            throw new RuntimeException("Failed to serialize Snowflake config", ex);
+        }
+    }
+
+    private ResponseEntity<?> toSnowflakeConfigResponse(String rawCloudConfig) {
+        if (rawCloudConfig == null || rawCloudConfig.isBlank()) {
+            return ResponseEntity.ok(Map.of("connected", false, "provider", "snowflake"));
+        }
+        String raw = rawCloudConfig.trim();
+        if (!raw.startsWith("{")) {
+            return ResponseEntity.ok(Map.of("connected", false, "provider", "snowflake"));
+        }
+        try {
+            var node = objectMapper.readTree(raw);
+            if (!"snowflake".equalsIgnoreCase(node.path("provider").asText(""))) {
+                return ResponseEntity.ok(Map.of("connected", false, "provider", "snowflake"));
+            }
+            return ResponseEntity.ok(Map.of(
+                    "connected",          true,
+                    "provider",           "snowflake",
+                    "account",            node.path("account").asText(""),
+                    "warehouse",          node.path("warehouse").asText(""),
+                    "database",           node.path("database").asText(""),
+                    "schema",             node.path("schema").asText("PUBLIC"),
+                    "connectionLink",     node.path("connectionLink").asText(""),
+                    "credentialsStored",  !node.path("username").asText("").isBlank()
+            ));
+        } catch (Exception ex) {
+            return ResponseEntity.ok(Map.of("connected", false, "provider", "snowflake"));
+        }
+    }
+
+    private StoredSnowflakeConfig parseStoredSnowflakeConfig(String rawConfig) {
+        String raw = rawConfig == null ? "" : rawConfig.trim();
+        if (raw.isBlank()) throw new IllegalArgumentException("Snowflake connector config is empty");
+        if (!raw.startsWith("{")) throw new IllegalArgumentException("Stored connector config is not JSON; reconnect Snowflake.");
+        try {
+            var node = objectMapper.readTree(raw);
+            if (!"snowflake".equalsIgnoreCase(node.path("provider").asText(""))) {
+                throw new IllegalArgumentException("Stored connector is not Snowflake");
+            }
+            String account   = node.path("account").asText("").trim();
+            String warehouse = node.path("warehouse").asText("").trim();
+            String database  = node.path("database").asText("").trim();
+            String schema    = node.path("schema").asText("PUBLIC").trim();
+            String username  = node.path("username").asText("").trim();
+            String password  = node.path("password").asText("").trim();
+            if (account.isBlank())   throw new IllegalArgumentException("Stored Snowflake account is missing");
+            if (database.isBlank())  throw new IllegalArgumentException("Stored Snowflake database is missing");
+            if (username.isBlank())  throw new IllegalArgumentException("Stored Snowflake username is missing");
+            return new StoredSnowflakeConfig(account, warehouse, database, schema, username, password);
+        } catch (IllegalArgumentException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new IllegalArgumentException("Stored Snowflake config is invalid JSON", ex);
+        }
+    }
+
+    private record StoredSnowflakeConfig(
+            String account, String warehouse, String database, String schema, String username, String password
+    ) {}
+
+    // ── Shared helpers ────────────────────────────────────────────────────────
 
     private String getAsString(Map<String, Object> body, String key) {
         Object value = body.get(key);
