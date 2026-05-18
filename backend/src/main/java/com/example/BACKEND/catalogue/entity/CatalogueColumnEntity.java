@@ -48,6 +48,25 @@ public class CatalogueColumnEntity {
     @Column(name = "avg_value")
     private String avgValue;
 
+    /**
+     * Semantic enrichment fields — populated by CatalogueSemanticEnricher at approval time.
+     * SUM | COUNT | AVG | LAST_VALUE | NONE
+     */
+    @Column(name = "aggregation_method")
+    private String aggregationMethod;
+
+    /** One-sentence plain-English description of what this column measures in a business context. */
+    @Column(name = "business_meaning", columnDefinition = "TEXT")
+    private String businessMeaning;
+
+    /** Best comparison period for trend analysis: WoW | MoM | YoY | NONE */
+    @Column(name = "comparison_period")
+    private String comparisonPeriod;
+
+    /** For date/time columns: daily | weekly | monthly | event | N/A */
+    @Column(name = "date_granularity")
+    private String dateGranularity;
+
     @Column(name = "is_sensitive", nullable = false)
     private boolean sensitive = false;
 
@@ -85,6 +104,14 @@ public class CatalogueColumnEntity {
     public void   setMaxValue(String s)                  { this.maxValue = s; }
     public String getAvgValue()                          { return avgValue; }
     public void   setAvgValue(String s)                  { this.avgValue = s; }
+    public String getAggregationMethod()                 { return aggregationMethod; }
+    public void   setAggregationMethod(String s)         { this.aggregationMethod = s; }
+    public String getBusinessMeaning()                   { return businessMeaning; }
+    public void   setBusinessMeaning(String s)           { this.businessMeaning = s; }
+    public String getComparisonPeriod()                  { return comparisonPeriod; }
+    public void   setComparisonPeriod(String s)          { this.comparisonPeriod = s; }
+    public String getDateGranularity()                   { return dateGranularity; }
+    public void   setDateGranularity(String s)           { this.dateGranularity = s; }
     public boolean isSensitive()                         { return sensitive; }
     public void    setSensitive(boolean b)               { this.sensitive = b; }
     public boolean isEnriched()                          { return enriched; }

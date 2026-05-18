@@ -36,13 +36,16 @@ public class CatalogueApprovalService {
     private final ClientCatalogueRepository catalogueRepo;
     private final CatalogueSnapshotRepository snapshotRepo;
     private final ObjectMapper objectMapper;
+    private final CatalogueSemanticEnricher semanticEnricher;
 
     public CatalogueApprovalService(ClientCatalogueRepository catalogueRepo,
                                     CatalogueSnapshotRepository snapshotRepo,
-                                    ObjectMapper objectMapper) {
-        this.catalogueRepo = catalogueRepo;
-        this.snapshotRepo  = snapshotRepo;
-        this.objectMapper  = objectMapper;
+                                    ObjectMapper objectMapper,
+                                    CatalogueSemanticEnricher semanticEnricher) {
+        this.catalogueRepo    = catalogueRepo;
+        this.snapshotRepo     = snapshotRepo;
+        this.objectMapper     = objectMapper;
+        this.semanticEnricher = semanticEnricher;
     }
 
     /**
@@ -61,6 +64,14 @@ public class CatalogueApprovalService {
         catalogue.setStatus("APPROVED");
         catalogue.setUpdatedAt(LocalDateTime.now());
         catalogueRepo.save(catalogue);
+
+        // Enrich column semantics with LLM (one call per table, best-effort)
+        try {
+            semanticEnricher.enrich(catalogue);
+            catalogueRepo.save(catalogue); // persist enriched column fields
+        } catch (Exception e) {
+            System.out.println("[Approval] Semantic enrichment failed (non-fatal): " + e.getMessage());
+        }
 
         // Upsert snapshot for this client to avoid unique-key collisions on client_id.
         CatalogueSnapshotEntity snapshot = snapshotRepo.findByClientId(catalogue.getClientId())
@@ -212,15 +223,20 @@ public class CatalogueApprovalService {
 
                 for (CatalogueColumnEntity col : table.getColumns()) {
                     ObjectNode colNode = objectMapper.createObjectNode();
-                    colNode.put("columnName",    col.getColumnName());
-                    colNode.put("dataType",      col.getDataType() != null ? col.getDataType() : "");
-                    colNode.put("description",   col.getDescription() != null ? col.getDescription() : "");
-                    colNode.put("role",          col.getRole() != null ? col.getRole() : "");
-                    colNode.put("synonyms",      col.getSynonyms() != null ? col.getSynonyms() : "[]");
-                    colNode.put("valueMeanings", col.getValueMeanings() != null ? col.getValueMeanings() : "{}");
-                    colNode.put("sampleValues",  col.getSampleValues() != null ? col.getSampleValues() : "[]");
-                    colNode.put("minValue",      col.getMinValue() != null ? col.getMinValue() : "");
-                    colNode.put("maxValue",      col.getMaxValue() != null ? col.getMaxValue() : "");
+                    colNode.put("columnName",       col.getColumnName());
+                    colNode.put("dataType",         col.getDataType() != null ? col.getDataType() : "");
+                    colNode.put("description",      col.getDescription() != null ? col.getDescription() : "");
+                    colNode.put("role",             col.getRole() != null ? col.getRole() : "");
+                    colNode.put("synonyms",         col.getSynonyms() != null ? col.getSynonyms() : "[]");
+                    colNode.put("valueMeanings",    col.getValueMeanings() != null ? col.getValueMeanings() : "{}");
+                    colNode.put("sampleValues",     col.getSampleValues() != null ? col.getSampleValues() : "[]");
+                    colNode.put("minValue",         col.getMinValue() != null ? col.getMinValue() : "");
+                    colNode.put("maxValue",         col.getMaxValue() != null ? col.getMaxValue() : "");
+                    // Semantic enrichment fields
+                    colNode.put("aggregationMethod", col.getAggregationMethod() != null ? col.getAggregationMethod() : "NONE");
+                    colNode.put("businessMeaning",   col.getBusinessMeaning()   != null ? col.getBusinessMeaning()   : "");
+                    colNode.put("comparisonPeriod",  col.getComparisonPeriod()  != null ? col.getComparisonPeriod()  : "NONE");
+                    colNode.put("dateGranularity",   col.getDateGranularity()   != null ? col.getDateGranularity()   : "N/A");
                     columnsArray.add(colNode);
                 }
 

@@ -1,5 +1,8 @@
 package com.example.BACKEND.user;
 
+import com.example.BACKEND.tenant.BigQueryConnectorService;
+import com.example.BACKEND.tenant.SnowflakeConnectorService;
+import com.example.BACKEND.tenant.TenantCloudConnectionService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -11,9 +14,20 @@ import java.util.Map;
 public class UserAccessController {
 
     private final UserAccessService userAccessService;
+    private final TenantCloudConnectionService cloudConnectionService;
+    private final BigQueryConnectorService bigQueryConnectorService;
+    private final SnowflakeConnectorService snowflakeConnectorService;
 
-    public UserAccessController(UserAccessService userAccessService) {
+    public UserAccessController(
+            UserAccessService userAccessService,
+            TenantCloudConnectionService cloudConnectionService,
+            BigQueryConnectorService bigQueryConnectorService,
+            SnowflakeConnectorService snowflakeConnectorService
+    ) {
         this.userAccessService = userAccessService;
+        this.cloudConnectionService = cloudConnectionService;
+        this.bigQueryConnectorService = bigQueryConnectorService;
+        this.snowflakeConnectorService = snowflakeConnectorService;
     }
 
     @PostMapping("/api/auth/user/login")
@@ -101,11 +115,56 @@ public class UserAccessController {
     }
 
     @GetMapping("/api/user/tables")
-    public ResponseEntity<?> listTables(@RequestParam String schema) {
+    public ResponseEntity<?> listTables(
+            @RequestParam String schema,
+            @RequestParam(required = false) String tenantId
+    ) {
         if (schema == null || schema.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "schema is required"));
         }
-        return ResponseEntity.ok(Map.of("tables", userAccessService.listTablesForSchema(schema.trim())));
+
+        // Resolve which tenant to check for cloud connector:
+        // prefer explicit tenantId param, fall back to schema (they are the same by convention)
+        String resolvedTenantId = (tenantId != null && !tenantId.isBlank()) ? tenantId.trim() : schema.trim();
+        String provider = cloudConnectionService.getProvider(resolvedTenantId);
+
+        try {
+            if ("bigquery".equals(provider)) {
+                var cfg = cloudConnectionService.getBigQueryConfig(resolvedTenantId);
+                if (cfg.isPresent()) {
+                    List<String> tables = bigQueryConnectorService.listTables(
+                            cfg.get().projectId(),
+                            cfg.get().serviceAccountJson(),
+                            cfg.get().location(),
+                            cfg.get().dataset()
+                    );
+                    return ResponseEntity.ok(Map.of("tables", tables, "source", "bigquery"));
+                }
+            }
+
+            if ("snowflake".equals(provider)) {
+                var cfg = cloudConnectionService.getSnowflakeConfig(resolvedTenantId);
+                if (cfg.isPresent()) {
+                    List<String> tables = snowflakeConnectorService.listTables(
+                            cfg.get().account(),
+                            cfg.get().warehouse(),
+                            cfg.get().database(),
+                            cfg.get().schema(),
+                            cfg.get().username(),
+                            cfg.get().password()
+                    );
+                    return ResponseEntity.ok(Map.of("tables", tables, "source", "snowflake"));
+                }
+            }
+
+            // Fallback: local PostgreSQL schema
+            List<String> tables = userAccessService.listTablesForSchema(schema.trim());
+            return ResponseEntity.ok(Map.of("tables", tables, "source", "postgres"));
+
+        } catch (Exception ex) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("error", "Failed to load tables: " + ex.getMessage()));
+        }
     }
 
     private String asString(Object value) {
