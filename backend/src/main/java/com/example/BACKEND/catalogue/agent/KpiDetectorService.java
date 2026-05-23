@@ -62,8 +62,43 @@ public class KpiDetectorService {
     // ── Public API ────────────────────────────────────────────────────────────
 
     /**
+     * Lightweight column classifier used by the universal sampling loop.
+     * Returns column-type hints for a single table node — no gating, no thresholds.
+     * Every table is considered worth sampling.
+     */
+    public ColumnHints classifyColumns(JsonNode tableNode) {
+        String tableName   = tableNode.path("tableName").asText("");
+        String tableSchema = tableNode.path("tableSchema").asText("public");
+
+        String       dateCol    = null;
+        List<String> stringCols = new ArrayList<>();
+        List<String> numericCols = new ArrayList<>();
+
+        for (JsonNode col : tableNode.path("columns")) {
+            String name     = col.path("columnName").asText("");
+            String type     = col.path("dataType").asText("").toLowerCase();
+            String role     = col.path("role").asText("").toLowerCase();
+            String dateGran = col.path("dateGranularity").asText("N/A");
+            String aggMethod = col.path("aggregationMethod").asText("NONE");
+            if (name.isBlank()) continue;
+
+            if (classifyAsDate(name.toLowerCase(), type, role, dateGran)) {
+                if (dateCol == null) dateCol = name;
+            } else if (classifyAsMetric(name.toLowerCase(), type, role, aggMethod)) {
+                numericCols.add(name);
+            } else {
+                // Everything else is potentially a categorical/string column
+                stringCols.add(name);
+            }
+        }
+
+        return new ColumnHints(tableName, tableSchema, dateCol, stringCols, numericCols);
+    }
+
+    /**
      * Scan the catalogue snapshot and return a DetectedSchema describing
      * every table's metric, date, and dimension columns.
+     * Kept for backward compatibility — not used as a gate in the analysis pipeline.
      */
     public DetectedSchema detect(JsonNode catalogueNode) {
         List<DetectedTable> tables = new ArrayList<>();
@@ -149,6 +184,18 @@ public class KpiDetectorService {
 
     // ── Value objects ─────────────────────────────────────────────────────────
 
+    /**
+     * Lightweight column classification result for one table.
+     * Used by the universal sampling loop in AgentAnalysisService.
+     */
+    public record ColumnHints(
+            String tableName,
+            String tableSchema,
+            String dateCol,           // first date/timestamp column (null if none)
+            List<String> stringCols,  // categorical / text columns
+            List<String> numericCols  // numeric / metric columns
+    ) {}
+
     public record DetectedTable(
             String tableName,
             String tableSchema,
@@ -156,8 +203,17 @@ public class KpiDetectorService {
             List<String> dateColumns,
             List<String> dimensionColumns
     ) {
-        /** Returns true when this table has enough information for useful analysis. */
+        /**
+         * Returns true when this table has enough information for useful analysis.
+         * Tables with only dimension columns (e.g. all-string catalogues like Netflix)
+         * are still analysable via COUNT(*) queries.
+         */
         public boolean isAnalysable() {
+            return !metricColumns.isEmpty() || !dimensionColumns.isEmpty();
+        }
+
+        /** True only when there are real numeric metric columns to aggregate. */
+        public boolean hasNumericMetrics() {
             return !metricColumns.isEmpty();
         }
     }

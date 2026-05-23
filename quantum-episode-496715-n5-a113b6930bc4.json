@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "quantum-episode-496715-n5",
+  "private_key_id": "a113b6930bc4135174460cce3d34d4b90402fb12",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC3rKU7ti7ts0UE\nkrK40baD0uNzHdP360/6aosJjDxSZOG+svBE37hxq982/EqMPse2L9q1TKppuSAV\nDRptbyhUOMfyjQQozC7GvY7D9MIXkopjLM5U897AWLwWApt3UROPrQC9FNVYl39M\nNxZVuJO36yLsme9VvDIVGILLYB7M9Ea6atlbsi874hHyul2WExn5SmjhlBfR4TcP\nAzO8q+Ty5JkdXbmKVg/2BsN0Eg0LpIHcrhym30DofHN3ZhPCMiRfwcIQq7pVg/mE\n5mEjMiqtm+urenTl8OuwyLfvYNRxlIe1U1g9/Sgo8j4lWY4INi7VsJ6eefayMzUi\nfFK+v/1tAgMBAAECggEAKmLLQ7cUZ9K/qeE/oKJ2m7+qMOnQfW0eaQO2v7aOwhXZ\nOYR6KW62VfcLfRkmC+y98idjcYS2a8zmoC0ErP3ioOL0k17i95Y88iyS2losgzuU\nN3RCzjxz6k/f4bVq0pNRcA3Etp2s6TOW0wwAWbpNTntS9SZF4rNaHF+qaUvud62/\nzcqib88v+ImQZc+JwxhMbZWj+CCjigga6575JcaddfNsa6tWpMGdH7IeMsEaPWnY\nLwasqYFWHOCJo0iLnRU/YoxIPDxh8/eaUnJgMOtqY0rheh31PJL2FfRN+5WWDbhh\ni9KpI86LDq9Wn88N/y/zjYbA42qMFp0e8icfU1ef8QKBgQDxhkoPjsnNsgFSsK7H\nqE9ty3hi6mszyaVH+LqWutnTqsumc8/fuY0ZTl9OL2Rmjmx4KxHiIKEumz1+/Bvh\n0FzvmINU4AN/WRBgXUWEHc8BfZJ06q74GS4vl1LfHn16Lv7j/7yksahgNp7LaUx+\nAIhyjZyj/faAdUvGm/C5SOb98QKBgQDCrsLaJyKWmdop4RE1W52NczC949GbpSY9\nEOTpsNVCK4OPiCpYI+rvDtH575ouHdnD8r1Hl94k4k19pxkbxbcEclfzsAftqFgw\nQu66w6QYoBFwvnoa2M0IOusfZAzpCd4Pu+7MdPKYDDe1QVkoNvCUl6E9m8vUOx1c\nNuCMTe4rPQKBgQC4sXyJESP5DBo+5aWCQI8c4u+YlLKN07F0rBvjj9drKby5+O4J\no5bmtyviWhNo6ZjA/A6c4V7giQ4pwRiBQhkPj40+pl+GTtFbH3g9Y54dAa2xgpVy\nW68Z7ZoNzP8fJDj+mV3kg4bCrIIaAtffswCkuO4D6f1Klmfv5OfciIc7wQKBgAO+\nMGjZT8TteFBNz3LjLAhIKqu78Y+4gR+zb3M+vxrik0jzKT1Ak4e9FTRk8uXoFQO7\nawAxX0f+Qdckm0r5Zidju2UoAT8EeY2T+9sDX+hJS4yLXPWfLXH3EAYuekEQu4A5\n8MFljjR2J6wIcZpgVAfHUoZItIaEDHB1baPE68tRAoGANEooSfB0kQLCcVyFeZjA\nkaQiV/V+lRQre0h6Pl6mGGJFtfyOaO/Y8NtfcP860GuqKBOPQkg9Jl/zcG0wBznp\n+Y1mQIC+4bm683Q8+rm+tgaiDIYEMYvFg3seRvPuP0GYiCTYLGC9SfWff1JrBKGv\nTNFxUXEW2s+rQBokYzws0NE=\n-----END PRIVATE KEY-----\n",
+  "client_email": "netflix@quantum-episode-496715-n5.iam.gserviceaccount.com",
+  "client_id": "104876397953613877782",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/netflix%40quantum-episode-496715-n5.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}

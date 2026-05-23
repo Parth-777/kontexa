@@ -1,5 +1,6 @@
 package com.example.BACKEND.catalogue.service;
 
+import com.example.BACKEND.catalogue.agent.StarSchemaDetector;
 import com.example.BACKEND.catalogue.entity.CatalogueColumnEntity;
 import com.example.BACKEND.catalogue.entity.CatalogueSnapshotEntity;
 import com.example.BACKEND.catalogue.entity.CatalogueTableEntity;
@@ -37,15 +38,18 @@ public class CatalogueApprovalService {
     private final CatalogueSnapshotRepository snapshotRepo;
     private final ObjectMapper objectMapper;
     private final CatalogueSemanticEnricher semanticEnricher;
+    private final StarSchemaDetector starSchemaDetector;
 
     public CatalogueApprovalService(ClientCatalogueRepository catalogueRepo,
                                     CatalogueSnapshotRepository snapshotRepo,
                                     ObjectMapper objectMapper,
-                                    CatalogueSemanticEnricher semanticEnricher) {
-        this.catalogueRepo    = catalogueRepo;
-        this.snapshotRepo     = snapshotRepo;
-        this.objectMapper     = objectMapper;
-        this.semanticEnricher = semanticEnricher;
+                                    CatalogueSemanticEnricher semanticEnricher,
+                                    StarSchemaDetector starSchemaDetector) {
+        this.catalogueRepo      = catalogueRepo;
+        this.snapshotRepo       = snapshotRepo;
+        this.objectMapper       = objectMapper;
+        this.semanticEnricher   = semanticEnricher;
+        this.starSchemaDetector = starSchemaDetector;
     }
 
     /**
@@ -71,6 +75,14 @@ public class CatalogueApprovalService {
             catalogueRepo.save(catalogue); // persist enriched column fields
         } catch (Exception e) {
             System.out.println("[Approval] Semantic enrichment failed (non-fatal): " + e.getMessage());
+        }
+
+        // Classify tables as FACT / DIMENSION / UNKNOWN and detect dimension joins (best-effort)
+        try {
+            starSchemaDetector.detect(catalogue);
+            catalogueRepo.save(catalogue); // persist tableRole on each table
+        } catch (Exception e) {
+            System.out.println("[Approval] Star schema detection failed (non-fatal): " + e.getMessage());
         }
 
         // Upsert snapshot for this client to avoid unique-key collisions on client_id.
@@ -214,6 +226,8 @@ public class CatalogueApprovalService {
                 ObjectNode tableNode = objectMapper.createObjectNode();
                 tableNode.put("tableName",   table.getTableName());
                 tableNode.put("tableSchema", table.getTableSchema());
+                tableNode.put("tableRole",   table.getTableRole() != null
+                        ? table.getTableRole() : "UNKNOWN");
                 tableNode.put("description", table.getDescription() != null
                         ? table.getDescription() : "");
                 tableNode.put("rowCount", table.getRowCount() != null

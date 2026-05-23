@@ -115,6 +115,117 @@ public class CatalogueQueryService {
         return new QueryResult(question, sql, rows);
     }
 
+    /**
+     * Executes LLM-provided SQL from the general chat agent (validated + normalized).
+     */
+    public QueryResult executeSqlForChat(String clientId, String sql, String questionContext) {
+        validateSelectOnly(sql);
+
+        String snapshotJson = approvalService.getApprovedSnapshot(clientId);
+        JsonNode fullNode   = parseSnapshot(snapshotJson);
+
+        String provider = cloudConnectionService.getProvider(clientId);
+        var bigQueryCfg  = "bigquery".equals(provider)  ? cloudConnectionService.getBigQueryConfig(clientId)  : java.util.Optional.<TenantCloudConnectionService.BigQueryConfig>empty();
+        var snowflakeCfg = "snowflake".equals(provider) ? cloudConnectionService.getSnowflakeConfig(clientId) : java.util.Optional.<TenantCloudConnectionService.SnowflakeConfig>empty();
+
+        boolean useBigQuery = bigQueryCfg.isPresent()
+                && notBlank(bigQueryCfg.get().projectId())
+                && notBlank(bigQueryCfg.get().dataset())
+                && notBlank(bigQueryCfg.get().serviceAccountJson());
+        boolean useSnowflake = snowflakeCfg.isPresent()
+                && notBlank(snowflakeCfg.get().account())
+                && notBlank(snowflakeCfg.get().database())
+                && notBlank(snowflakeCfg.get().username());
+
+        sql = injectMissingCategoryFilters(sql, questionContext, fullNode);
+        sql = enforceExplicitIntentFilters(sql, questionContext, fullNode);
+
+        if (useBigQuery) {
+            sql = normalizeBigQueryDatasetQualifiers(sql, bigQueryCfg.get().dataset(), fullNode);
+        } else if (useSnowflake) {
+            sql = normalizeSchemaQualifiers(sql, snowflakeCfg.get().schema(), fullNode);
+        } else {
+            sql = normalizeSchemaQualifiers(sql, clientId, fullNode);
+        }
+
+        sql = normalizeYearDateFilters(sql, questionContext, fullNode);
+        sql = normalizeDatePredicates(sql, fullNode);
+        sql = fixIntegerColumnILike(sql, fullNode);
+        sql = fixSemanticColumnMapping(sql, questionContext, fullNode);
+        if (useBigQuery) sql = normalizeForBigQuery(sql);
+
+        if (!sql.toLowerCase().contains(" limit ")) {
+            sql = sql.replaceAll(";\\s*$", "") + " LIMIT 1000";
+        }
+
+        List<Map<String, Object>> rows;
+        if (useBigQuery)       rows = executeBigQuery(sql, bigQueryCfg.get());
+        else if (useSnowflake) rows = executeSnowflake(sql, snowflakeCfg.get());
+        else                   rows = executeQuery(sql);
+
+        return new QueryResult(questionContext, sql, rows);
+    }
+
+    private void validateSelectOnly(String sql) {
+        if (sql == null || sql.isBlank())
+            throw new IllegalArgumentException("Empty SQL");
+        String lower = sql.trim().toLowerCase();
+        if (!lower.startsWith("select"))
+            throw new IllegalArgumentException("Only SELECT queries are allowed");
+        if (lower.contains(";") && lower.indexOf(';') < lower.length() - 1)
+            throw new IllegalArgumentException("Multiple SQL statements not allowed");
+        String[] forbidden = {"drop ", "delete ", "insert ", "update ", "alter ", "truncate ", "create "};
+        for (String f : forbidden) {
+            if (lower.contains(f))
+                throw new IllegalArgumentException("Forbidden SQL operation: " + f.trim());
+        }
+    }
+
+    /**
+     * Re-runs SQL generation with an extra correction hint appended to the user prompt.
+     * Used by ChatOrchestratorService when the first attempt returns 0 rows.
+     */
+    public QueryResult askWithHint(String clientId, String question, String correctionHint) {
+        String snapshotJson = approvalService.getApprovedSnapshot(clientId);
+        JsonNode fullNode   = parseSnapshot(snapshotJson);
+        JsonNode relevantNode = retrieverService.buildRelevantCatalogueSlice(fullNode, question);
+
+        String provider      = cloudConnectionService.getProvider(clientId);
+        var bigQueryCfg      = "bigquery".equals(provider)  ? cloudConnectionService.getBigQueryConfig(clientId)  : java.util.Optional.<TenantCloudConnectionService.BigQueryConfig>empty();
+        var snowflakeCfg     = "snowflake".equals(provider) ? cloudConnectionService.getSnowflakeConfig(clientId) : java.util.Optional.<TenantCloudConnectionService.SnowflakeConfig>empty();
+
+        boolean useBigQuery  = bigQueryCfg.isPresent()  && notBlank(bigQueryCfg.get().projectId())  && notBlank(bigQueryCfg.get().dataset());
+        boolean useSnowflake = snowflakeCfg.isPresent() && notBlank(snowflakeCfg.get().account())   && notBlank(snowflakeCfg.get().database());
+
+        String systemPrompt  = promptBuilder.buildSystemPromptFromSnapshot(relevantNode);
+        if (useBigQuery)  systemPrompt += "\nUse BigQuery Standard SQL syntax.";
+        if (useSnowflake) systemPrompt += "\nUse Snowflake SQL syntax.";
+
+        // Append the correction hint to the user prompt
+        String userPrompt = promptBuilder.buildUserPrompt(question) + "\n\nHINT: " + correctionHint;
+        String sql = callLlmForSql(systemPrompt, userPrompt);
+
+        sql = injectMissingCategoryFilters(sql, question, fullNode);
+        sql = enforceExplicitIntentFilters(sql, question, fullNode);
+
+        if (useBigQuery)       sql = normalizeBigQueryDatasetQualifiers(sql, bigQueryCfg.get().dataset(), fullNode);
+        else if (useSnowflake) sql = normalizeSchemaQualifiers(sql, snowflakeCfg.get().schema(), fullNode);
+        else                   sql = normalizeSchemaQualifiers(sql, clientId, fullNode);
+
+        sql = normalizeYearDateFilters(sql, question, fullNode);
+        sql = normalizeDatePredicates(sql, fullNode);
+        sql = fixIntegerColumnILike(sql, fullNode);
+        sql = fixSemanticColumnMapping(sql, question, fullNode);
+        if (useBigQuery) sql = normalizeForBigQuery(sql);
+
+        List<Map<String, Object>> rows;
+        if (useBigQuery)       rows = executeBigQuery(sql, bigQueryCfg.get());
+        else if (useSnowflake) rows = executeSnowflake(sql, snowflakeCfg.get());
+        else                   rows = executeQuery(sql);
+
+        return new QueryResult(question, sql, rows);
+    }
+
     private List<Map<String, Object>> executeBigQuery(
             String sql,
             TenantCloudConnectionService.BigQueryConfig cfg

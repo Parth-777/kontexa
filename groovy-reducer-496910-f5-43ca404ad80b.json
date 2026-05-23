@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "groovy-reducer-496910-f5",
+  "private_key_id": "43ca404ad80bd67fcac64e6f0b8ae7ac80910e2f",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCis2CC5YWHCT6v\nhjuk1cQ4pO4tiU5mGgOfYg4exjKPMUf/1xGlG7aP5D54AqQRyvkXgW+Obbvv+IuE\n2cFaiK73IjdvTzfuQghqB/+XCha51DpnW2qkYCZqu6SgRe58cSTb0kSW7gGNVkT6\nCeQwYOKbXbVp4b6B+yRXAVfJocC2lMzbMX0L0iOPozC4yZg/b7O6KanXpFO3sLf6\nykAr+joRtYD2CZi3hFeAVEwjVHY2AbYBQNQbfQFrK1TbcLNxt56MMy/maqqRm9Fg\n4Ee1vqSX3xy8CVFVF8OWIPA2Gv4G2oaPv0K7onHIMNusQNA0LwfD93N43nfuHrsQ\n+Az6+tuxAgMBAAECggEAFN+eiiyYLPLqr+owzL0AJ6RBSmZLQJ4lyNTzqs8SvXw9\nGH2nLd+YVG2b9hmgowe/XVyly0gYzHi+rZSiUdMnX11sb0NikZa3LaNJDz+kGsM3\nmvsHe386bocUX9uY9S4u5GTdl9+BI3jl8I5EUFCdwgELvUHRBywJRYBOmve9ma7Z\nDUXGTthXvd3s06BrE/7gBPFVFDsSvltP0NG+TceSm0IGbpCV/3s4VqU5JZzSIO2Z\nHFoMdAwlzhmyHiXeSqSWfXUr5/n87dXbQxsKECMBozjKnr7ZFOl6csTdHKqmUuAF\npxsw82ZDFMgmMs7gqUu9NQqafsBm1gdaTYETP/eJ4QKBgQDVsUZWXxAVdGiPP+Yx\nFl45gDtHiKzJ6s1fPbR4TVWykYQc+9TcE8+TmBT6PxZCTlHM/nYCul3p9xXA5Cab\neXBiOqN3/Rwlx0E6nZmhWnLpUa/8A3yJRnmepHNKSDO/Y5+cBlTg+gNHWcF5YXdB\nLJWDqaZnxT6fGbcOhItz//HmmwKBgQDC6aZaaovHxFfHLfNGYvryMZu/6pu9o4oC\nYun2pq88Jiv6+jxkdl0VNI+08PiMJg0jaP+mUvnEkZKG0Uqwbw5ykvjnAjc6v404\nObTVRTgw+d7QHF883B6HdrFOMd5ihNVUCEszw1nK2zdFN2PhmOGpGlKFcvz3kXnu\np1vEjJwFowKBgBsYjWiqSSnPRurTGWckBPKZlequI+q+gSgQdO/ELpej5/Kc5BK7\n2FhIsnBAy5vAvpKVuXUDGKFwGSwKQfL45Q0vjkbKq2UG7Ph3v2E8TNHU79Gux33I\nl+dLxuqmWRltknGARAb67KuBcAzqFOsIsjStsFH8KsKVyiZnHB+rVor9AoGAFed2\nF3Ej1kZdavfiAAX9l5w1maK+79fiGZSOIHbo+IR9qs3WXZ/jpA9tGvN9qxpXnaQe\nHs3yXcHSSq5Yi21fnUahDCz2kfaW4zuw88q8ntxlytN1bHx8PdL76AK4sC+nXbM0\n6FNK0v5BvtiTs/WfXoajwXWDsjq6DjTmnjcDDasCgYEAsZr/tSEZQkJpBBFRCi4T\npOVC6B8eHBydKBSBsiB02zpKtNWxniv5bC85O5YspowjPnHiQ6i2A+U2HDc1BmWb\n4WFP65Fat3Pi8L6WdhH9SMfLqB2oOSTnMo/PVDPROdQ5UDLj9oD9VXdQ8l5Vzbkl\nlYkvNhPs7ru8pO+kaO8rs10=\n-----END PRIVATE KEY-----\n",
+  "client_email": "ecomm-832@groovy-reducer-496910-f5.iam.gserviceaccount.com",
+  "client_id": "106932793455443001304",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/ecomm-832%40groovy-reducer-496910-f5.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}

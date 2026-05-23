@@ -49,10 +49,29 @@ public class AgentDashboardResult {
         public String getDirection()      { return direction; }
     }
 
+    public static class MetricHighlight {
+        private String label;
+        private String value;
+
+        public MetricHighlight() {}
+        public MetricHighlight(String label, String value) {
+            this.label = label;
+            this.value = value;
+        }
+        public String getLabel() { return label; }
+        public String getValue() { return value; }
+    }
+
     public static class InsightCard {
+        /** Populated after DB persistence — null for cards not yet saved. */
+        private String id;
         private String title;
         private String description;
-        private String impactLevel;   // HIGH | MEDIUM | LOW | POSITIVE
+        private String impactLevel;       // HIGH | MEDIUM | LOW | POSITIVE
+        private String badge;             // ALERT | RISK | OPPORTUNITY | INFO
+        private String agentName;         // e.g. "Revenue agent"
+        private List<MetricHighlight> metricHighlights;   // up to 3 mini KPI chips
+        private List<String> suggestedActions;            // up to 3 action labels
 
         public InsightCard() {}
         public InsightCard(String title, String description, String impactLevel) {
@@ -61,9 +80,36 @@ public class AgentDashboardResult {
             this.impactLevel = impactLevel;
         }
 
+        public String getId()          { return id; }
+        public void   setId(String v)  { this.id = v; }
         public String getTitle()       { return title; }
+        public void   setTitle(String v) { this.title = v; }
         public String getDescription() { return description; }
+        public void   setDescription(String v) { this.description = v; }
         public String getImpactLevel() { return impactLevel; }
+        public void   setImpactLevel(String v) { this.impactLevel = v; }
+        public String getBadge()       { return badge; }
+        public void   setBadge(String v) { this.badge = v; }
+        public String getAgentName()   { return agentName; }
+        public void   setAgentName(String v) { this.agentName = v; }
+        public List<MetricHighlight> getMetricHighlights() { return metricHighlights; }
+        public void setMetricHighlights(List<MetricHighlight> v) { this.metricHighlights = v; }
+        public List<String> getSuggestedActions() { return suggestedActions; }
+        public void setSuggestedActions(List<String> v) { this.suggestedActions = v; }
+
+        /** Why this insight occurred — 2-3 data-backed reasons */
+        private List<String> reasons;
+        /** What to do about it — 2-3 specific, actionable strategies */
+        private List<String> strategies;
+        /** Actual column names from the data the LLM cited as the basis for this insight */
+        private List<String> sourceColumns;
+
+        public List<String> getReasons()             { return reasons; }
+        public void setReasons(List<String> v)       { this.reasons = v; }
+        public List<String> getStrategies()          { return strategies; }
+        public void setStrategies(List<String> v)    { this.strategies = v; }
+        public List<String> getSourceColumns()       { return sourceColumns; }
+        public void setSourceColumns(List<String> v) { this.sourceColumns = v; }
     }
 
     public static class Investigation {

@@ -61,14 +61,14 @@ function SignInPage() {
     <div className="signin-page">
       <main className="signin-main">
         <section className="signin-card">
-          <h1>{accountType === 'tenant' ? 'Tenant sign in' : 'User sign in'}</h1>
+          <h1>{accountType === 'tenant' ? 'Admin sign in' : 'User sign in'}</h1>
           <div className="signin-toggle">
             <button
               className={accountType === 'tenant' ? 'active' : ''}
               onClick={() => setAccountType('tenant')}
               type="button"
             >
-              Tenant
+              Admin
             </button>
             <button
               className={accountType === 'user' ? 'active' : ''}

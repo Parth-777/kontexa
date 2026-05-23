@@ -28,6 +28,13 @@ public class CatalogueTableEntity {
     @Column(name = "row_count")
     private Long rowCount;
 
+    /**
+     * Star-schema role assigned by StarSchemaDetector at catalogue approval time.
+     * Values: FACT | DIMENSION | UNKNOWN
+     */
+    @Column(name = "table_role")
+    private String tableRole;
+
     @OneToMany(mappedBy = "catalogueTable", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<CatalogueColumnEntity> columns = new ArrayList<>();
 
@@ -44,6 +51,8 @@ public class CatalogueTableEntity {
     public void   setDescription(String s)                { this.description = s; }
     public Long   getRowCount()                           { return rowCount; }
     public void   setRowCount(Long r)                     { this.rowCount = r; }
+    public String getTableRole()                          { return tableRole; }
+    public void   setTableRole(String s)                  { this.tableRole = s; }
     public List<CatalogueColumnEntity> getColumns()       { return columns; }
     public void setColumns(List<CatalogueColumnEntity> c) { this.columns = c; }
 }

@@ -52,22 +52,19 @@ function HomePage() {
           <a href="#features">Features</a>
           <a href="#how-it-works">How It Works</a>
           <Link to="/signin" className="nav-link">
-            Get Access
+            Get Started
           </Link>
         </div>
       </nav>
 
       <section className="hero">
-        <span className="hero-pill">Now in Early Access</span>
+        
         <h1>
           Ask your data
           <br />
           <span>anything.</span>
         </h1>
-        <p>
-          KONTEXA is the intelligence layer for your analytics stack. Query Amplitude, Mixpanel, or
-          PostHog with natural language - get charts, insights, and explanations in seconds.
-        </p>
+        
         <div className="hero-query-box">
           <b>›</b>
           <span>{typedText || ' '}</span>
@@ -75,7 +72,7 @@ function HomePage() {
         </div>
         <div className="hero-actions">
           <Link to="/signin" className="hero-btn primary">
-            Get Early Access
+            Get Started
           </Link>
           <a href="#how-it-works" className="hero-btn secondary">
             See how it works
@@ -122,7 +119,7 @@ function HomePage() {
           Join the early access program. Be among the first teams to unlock natural language
           analytics.
         </p>
-        <Link to="/signin" className="hero-btn primary">
+        <Link to="#" className="hero-btn primary">
           Request Access
         </Link>
       </section>
