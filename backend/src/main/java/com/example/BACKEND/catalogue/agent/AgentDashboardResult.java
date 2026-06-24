@@ -1,5 +1,7 @@
 package com.example.BACKEND.catalogue.agent;
 
+import com.example.BACKEND.catalogue.charts.ChartSpec;
+
 import java.util.List;
 
 /**
@@ -19,6 +21,8 @@ public class AgentDashboardResult {
     private String             dataSource;
     private String             lastUpdated;
     private String             errorMessage;
+    /** One-line leadership brief — top 3 material findings. */
+    private String             dailyBrief;
 
     // ── Nested types ─────────────────────────────────────────────────────────
 
@@ -104,12 +108,18 @@ public class AgentDashboardResult {
         /** Actual column names from the data the LLM cited as the basis for this insight */
         private List<String> sourceColumns;
 
+        /** Optional chart spec for this card (rendered by frontend). */
+        private ChartSpec chart;
+
         public List<String> getReasons()             { return reasons; }
         public void setReasons(List<String> v)       { this.reasons = v; }
         public List<String> getStrategies()          { return strategies; }
         public void setStrategies(List<String> v)    { this.strategies = v; }
         public List<String> getSourceColumns()       { return sourceColumns; }
         public void setSourceColumns(List<String> v) { this.sourceColumns = v; }
+
+        public ChartSpec getChart()                  { return chart; }
+        public void setChart(ChartSpec v)            { this.chart = v; }
     }
 
     public static class Investigation {
@@ -183,4 +193,7 @@ public class AgentDashboardResult {
 
     public String  getErrorMessage()         { return errorMessage; }
     public void    setErrorMessage(String v) { this.errorMessage = v; }
+
+    public String  getDailyBrief()           { return dailyBrief; }
+    public void    setDailyBrief(String v)   { this.dailyBrief = v; }
 }

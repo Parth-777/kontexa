@@ -1,4 +1,144 @@
+import { getAuthHeaders } from './session';
+
 const BASE_URL = 'http://localhost:5000';
+
+/** Unified workspace login — Workspace ID + password only */
+export async function workspaceLogin({ workspaceId, password, deviceLabel }) {
+  const response = await fetch(`${BASE_URL}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspaceId, password, deviceLabel }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || 'Login failed');
+  return payload;
+}
+
+export async function refreshSession(refreshToken) {
+  const response = await fetch(`${BASE_URL}/api/auth/refresh`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refreshToken }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || 'Session refresh failed');
+  return payload;
+}
+
+export async function logoutSession(accessToken) {
+  await fetch(`${BASE_URL}/api/auth/logout`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    },
+    body: JSON.stringify({ accessToken }),
+  });
+}
+
+export async function inviteWorkspaceMember({ email, role }) {
+  const response = await fetch(`${BASE_URL}/api/auth/invites`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ email, role }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || 'Failed to send invite');
+  return payload;
+}
+
+export async function validateInviteToken(token) {
+  const response = await fetch(`${BASE_URL}/api/auth/invites/validate?token=${encodeURIComponent(token)}`);
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || 'Invalid invite');
+  return payload;
+}
+
+export async function fetchWorkspaceMembers() {
+  const response = await fetch(`${BASE_URL}/api/workspace/members`, {
+    headers: getAuthHeaders(),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || 'Failed to load team members');
+  return payload;
+}
+
+export async function resendWorkspaceInvite(inviteId) {
+  const response = await fetch(`${BASE_URL}/api/auth/invites/${encodeURIComponent(inviteId)}/resend`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || 'Failed to resend invite');
+  return payload;
+}
+
+export async function revokeWorkspaceInvite(inviteId) {
+  const response = await fetch(`${BASE_URL}/api/auth/invites/${encodeURIComponent(inviteId)}/revoke`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || 'Failed to revoke invite');
+  return payload;
+}
+
+export async function updateWorkspaceMemberRole({ identityId, role }) {
+  const response = await fetch(`${BASE_URL}/api/workspace/members/${encodeURIComponent(identityId)}/role`, {
+    method: 'PUT',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ role }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || 'Failed to update role');
+  return payload;
+}
+
+export async function updateWorkspaceMemberStatus({ identityId, active }) {
+  const response = await fetch(`${BASE_URL}/api/workspace/members/${encodeURIComponent(identityId)}/status`, {
+    method: 'PUT',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ active }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || 'Failed to update status');
+  return payload;
+}
+
+export async function acceptInvite({ token, password, displayName }) {
+  const response = await fetch(`${BASE_URL}/api/auth/invites/accept`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token, password, displayName }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || 'Failed to accept invite');
+  return payload;
+}
+
+export async function requestPasswordReset(email) {
+  const response = await fetch(`${BASE_URL}/api/auth/password-reset/request`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || 'Failed to request reset');
+  return payload;
+}
+
+export async function confirmPasswordReset({ token, password }) {
+  const response = await fetch(`${BASE_URL}/api/auth/password-reset/confirm`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token, password }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || 'Failed to reset password');
+  return payload;
+}
+
+// ── Legacy endpoints (backward compat during migration) ─────────────────────
 
 export async function tenantLogin(userId, password) {
   const response = await fetch(`${BASE_URL}/api/auth/tenant/login`, {
@@ -26,17 +166,6 @@ export async function fetchTenantUsers(tenantId) {
   const response = await fetch(`${BASE_URL}/api/tenant/users?tenantId=${encodeURIComponent(tenantId)}`);
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || 'Failed to load users');
-  return payload;
-}
-
-export async function createTenantUser({ tenantId, userId, password, position, active }) {
-  const response = await fetch(`${BASE_URL}/api/tenant/users`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tenantId, userId, password, position, active }),
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Failed to create user');
   return payload;
 }
 
@@ -72,26 +201,6 @@ export async function deleteTenantUser({ tenantId, userId }) {
   return payload;
 }
 
-export async function fetchTenantCloudLink(tenantId) {
-  const response = await fetch(
-    `${BASE_URL}/api/auth/tenant/cloud-link?tenantId=${encodeURIComponent(tenantId)}`
-  );
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Failed to load cloud database link');
-  return payload;
-}
-
-export async function updateTenantCloudLink({ tenantId, cloudDbLink }) {
-  const response = await fetch(`${BASE_URL}/api/auth/tenant/cloud-link`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tenantId, cloudDbLink }),
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Failed to update cloud database link');
-  return payload;
-}
-
 export async function testTenantBigQueryConnection({ projectId, serviceAccountJson, location, dataset }) {
   const response = await fetch(`${BASE_URL}/api/auth/tenant/bigquery/test-connection`, {
     method: 'POST',
@@ -103,13 +212,7 @@ export async function testTenantBigQueryConnection({ projectId, serviceAccountJs
   return payload;
 }
 
-export async function connectTenantBigQuery({
-  tenantId,
-  projectId,
-  serviceAccountJson,
-  location,
-  dataset,
-}) {
+export async function connectTenantBigQuery({ tenantId, projectId, serviceAccountJson, location, dataset }) {
   const response = await fetch(`${BASE_URL}/api/auth/tenant/bigquery/connect`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

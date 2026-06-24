@@ -1,5 +1,6 @@
 package com.example.BACKEND.tenant;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
@@ -109,6 +110,19 @@ public class TenantCloudConnectionService {
     }
 
     // ── Generic provider check ────────────────────────────────────────────────
+
+    private String extractServiceAccountJson(JsonNode sa) {
+        if (sa == null || sa.isNull() || sa.isMissingNode()) return "";
+        if (sa.isTextual()) return sa.asText().trim();
+        if (sa.isObject()) {
+            try {
+                return objectMapper.writeValueAsString(sa);
+            } catch (JsonProcessingException ex) {
+                return "";
+            }
+        }
+        return sa.asText("").trim();
+    }
 
     /** Returns the cloud provider key stored for a tenant, or empty string. */
     public String getProvider(String tenantId) {

@@ -1,0 +1,88 @@
+.tbl-wrap {
+  margin: 12px 0;
+  border: 1px solid var(--border, #252b3a);
+  border-radius: 8px;
+  background: var(--surface, #161a23);
+  overflow: hidden;
+}
+
+.tbl-title {
+  padding: 10px 14px 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-sub, #8892aa);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tbl-scroll {
+  overflow-x: auto;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.tbl thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.tbl th {
+  padding: 10px 14px;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-sub, #8892aa);
+  background: var(--surface2, #1e2330);
+  border-bottom: 1px solid var(--border, #252b3a);
+  white-space: nowrap;
+}
+
+.tbl-th--sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.tbl-th--sortable:hover {
+  color: var(--text, #e8eaf6);
+}
+
+.tbl-sort-icon {
+  margin-left: 4px;
+  font-size: 10px;
+}
+
+.tbl td {
+  padding: 9px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  color: var(--text, #e8eaf6);
+}
+
+.tbl-wrap--compact .tbl td,
+.tbl-wrap--compact .tbl th {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.tbl tbody tr:hover td {
+  background: rgba(59, 130, 246, 0.06);
+}
+
+.tbl-cell--currency,
+.tbl-cell--number,
+.tbl-cell--percent {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.tbl-cell--currency {
+  font-weight: 500;
+}

@@ -1,0 +1,126 @@
+.et-panel {
+  margin: 10px 0 14px;
+  border: 1px solid var(--border, #252b3a);
+  border-radius: 8px;
+  background: var(--surface2, #1e2330);
+  overflow: hidden;
+}
+
+.et-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-sub, #8892aa);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.et-toggle:hover {
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text, #e8eaf6);
+}
+
+.et-toggle-label {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-sub, #8892aa);
+}
+
+.et-toggle-meta {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.et-chevron {
+  color: var(--text-dim, #4a5568);
+  font-size: 11px;
+}
+
+.et-steps {
+  list-style: none;
+  margin: 0;
+  padding: 4px 12px 12px;
+  border-top: 1px solid var(--border, #252b3a);
+}
+
+.et-step {
+  display: flex;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  animation: et-fade-in 0.25s ease both;
+}
+
+.et-step:last-child {
+  border-bottom: none;
+}
+
+@keyframes et-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.et-step-icon {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  border-radius: 50%;
+  background: var(--surface, #161a23);
+  color: var(--text-dim, #4a5568);
+}
+
+.et-step--running .et-step-icon {
+  color: var(--accent, #3b82f6);
+  animation: et-spin 1s linear infinite;
+}
+
+.et-step--completed .et-step-icon {
+  color: var(--green, #10b981);
+  background: rgba(16, 185, 129, 0.12);
+}
+
+.et-step--failed .et-step-icon {
+  color: var(--red, #ef4444);
+  background: rgba(239, 68, 68, 0.12);
+}
+
+@keyframes et-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.et-step-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.et-step-title {
+  font-size: 13px;
+  color: var(--text, #e8eaf6);
+  font-weight: 500;
+}
+
+.et-step-detail {
+  font-size: 12px;
+  color: var(--text-sub, #8892aa);
+}
+
+.et-step-timing {
+  font-size: 11px;
+  color: var(--text-dim, #4a5568);
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+}

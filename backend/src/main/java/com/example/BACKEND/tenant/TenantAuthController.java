@@ -421,6 +421,20 @@ public class TenantAuthController {
         return String.valueOf(value).trim();
     }
 
+    private String extractStoredServiceAccountJson(com.fasterxml.jackson.databind.JsonNode configNode) {
+        com.fasterxml.jackson.databind.JsonNode sa = configNode.get("serviceAccountJson");
+        if (sa == null || sa.isNull()) return "";
+        if (sa.isTextual()) return sa.asText().trim();
+        if (sa.isObject()) {
+            try {
+                return objectMapper.writeValueAsString(sa);
+            } catch (JsonProcessingException ex) {
+                throw new IllegalArgumentException("Stored service account JSON is invalid", ex);
+            }
+        }
+        return sa.asText("").trim();
+    }
+
     private String extractServiceAccountJson(Map<String, Object> body) {
         Object raw = body.get("serviceAccountJson");
         if (raw == null) return null;
@@ -515,11 +529,13 @@ public class TenantAuthController {
             String projectId = node.path("projectId").asText("").trim();
             String dataset = node.path("dataset").asText("").trim();
             String location = node.path("location").asText("").trim();
-            String serviceAccountJson = node.path("serviceAccountJson").asText("").trim();
+            String serviceAccountJson = extractStoredServiceAccountJson(node);
             if (projectId.isBlank()) throw new IllegalArgumentException("Stored BigQuery projectId is missing");
             if (dataset.isBlank()) throw new IllegalArgumentException("Stored BigQuery dataset is missing");
             if (serviceAccountJson.isBlank()) {
-                throw new IllegalArgumentException("Stored BigQuery service account is missing");
+                throw new IllegalArgumentException(
+                        "Stored BigQuery service account is missing or corrupted. "
+                                + "Reconnect using a fresh JSON key from GCP.");
             }
             return new StoredBigQueryConfig(projectId, location, dataset, serviceAccountJson);
         } catch (IllegalArgumentException ex) {

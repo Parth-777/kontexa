@@ -1,111 +1,180 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { tenantLogin, userLogin } from '../api/authApi';
+import { workspaceLogin } from '../api/authApi';
+import { isAdminRole, saveSession } from '../api/session';
 import './SignInPage.css';
 
 function SignInPage() {
   const navigate = useNavigate();
-  const [userId, setUserId] = useState('');
-  const [password, setPassword] = useState('');
-  const [accountType, setAccountType] = useState('tenant');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [errorMessage, setErrorMessage] = useState('');
+  const [workspaceId,   setWorkspaceId]   = useState('');
+  const [password,      setPassword]      = useState('');
+  const [isSubmitting,  setIsSubmitting]  = useState(false);
+  const [errorMessage,  setErrorMessage]  = useState('');
+  const [showPassword,  setShowPassword]  = useState(false);
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-    const normalizedUserId = userId.trim();
+    const normalizedWorkspaceId = workspaceId.trim();
     const normalizedPassword = password.trim();
-    if (!normalizedUserId || !normalizedPassword) {
-      setErrorMessage('User ID and password are required.');
+    if (!normalizedWorkspaceId || !normalizedPassword) {
+      setErrorMessage('Workspace ID and password are required.');
       return;
     }
-
     try {
       setIsSubmitting(true);
       setErrorMessage('');
-      if (accountType === 'tenant') {
-        const loginResult = await tenantLogin(normalizedUserId, normalizedPassword);
-        window.sessionStorage.setItem(
-          'kontexaTenantSession',
-          JSON.stringify({
-            userId: loginResult.userId || normalizedUserId,
-            tenantId: loginResult.tenantId || '',
-            tenantSchema: loginResult.tenantSchema || '',
-            cloudDbLink: loginResult.cloudDbLink || '',
-            loggedInAt: new Date().toISOString(),
-          })
-        );
+
+      const loginResult = await workspaceLogin({
+        workspaceId: normalizedWorkspaceId,
+        password: normalizedPassword,
+        deviceLabel: 'Kontexa Web',
+      });
+
+      saveSession({
+        userId:         loginResult.userId || normalizedWorkspaceId,
+        email:          loginResult.email || '',
+        displayName:    loginResult.displayName || normalizedWorkspaceId,
+        role:           loginResult.role || 'VIEWER',
+        workspaceId:    loginResult.workspaceId || '',
+        workspaceSlug:  loginResult.workspaceSlug || loginResult.tenantId || '',
+        tenantId:       loginResult.tenantId || loginResult.workspaceSlug || '',
+        tenantSchema:   loginResult.tenantSchema || loginResult.workspaceSlug || '',
+        cloudDbLink:    loginResult.cloudDbLink || '',
+        accessToken:    loginResult.accessToken || '',
+        refreshToken:   loginResult.refreshToken || '',
+        authSource:     loginResult.authSource || '',
+        loggedInAt:     new Date().toISOString(),
+      });
+
+      if (isAdminRole(loginResult.role)) {
         navigate('/tenant/dashboard');
       } else {
-        const loginResult = await userLogin(normalizedUserId, normalizedPassword);
-        window.sessionStorage.setItem(
-          'kontexaUserSession',
-          JSON.stringify({
-            userId: loginResult.userId || normalizedUserId,
-            tenantId: loginResult.tenantId || '',
-            tenantSchema: loginResult.tenantSchema || '',
-            position: loginResult.position || '',
-            loggedInAt: new Date().toISOString(),
-          })
-        );
         navigate('/user/dashboard');
       }
     } catch (error) {
-      setErrorMessage(error.message || 'Unable to login');
+      setErrorMessage(error.message || 'Invalid credentials. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
   };
 
   return (
-    <div className="signin-page">
-      <main className="signin-main">
-        <section className="signin-card">
-          <h1>{accountType === 'tenant' ? 'Admin sign in' : 'User sign in'}</h1>
-          <div className="signin-toggle">
-            <button
-              className={accountType === 'tenant' ? 'active' : ''}
-              onClick={() => setAccountType('tenant')}
-              type="button"
-            >
-              Admin
-            </button>
-            <button
-              className={accountType === 'user' ? 'active' : ''}
-              onClick={() => setAccountType('user')}
-              type="button"
-            >
-              User
-            </button>
+    <div className="auth-shell">
+
+      <div className="auth-left">
+        <div className="auth-left-inner">
+          <div className="auth-brand">
+            <span className="auth-logo-mark">K</span>
+            <span className="auth-wordmark">KONTEXA</span>
           </div>
 
-          <form onSubmit={handleSubmit}>
-            <label htmlFor="userid">User ID</label>
-            <input
-              id="userid"
-              type="text"
-              value={userId}
-              onChange={(event) => setUserId(event.target.value)}
-              required
-            />
-            <label htmlFor="password">Password</label>
-            <input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              required
-            />
-            <button type="submit" disabled={isSubmitting}>
-              {isSubmitting ? 'Signing in...' : 'Sign In'}
+          <div className="auth-hero-copy">
+            <p className="auth-category">Business Intelligence Platform</p>
+            <h1 className="auth-headline">
+              Enterprise AI reasoning<br />for modern data teams.
+            </h1>
+            <p className="auth-subheadline">
+              Turn warehouse data into structured analytical intelligence.
+              Ask questions. Get findings. Make decisions.
+            </p>
+          </div>
+
+          <div className="auth-trust">
+            <div className="trust-item">
+              <span className="trust-icon">◈</span>
+              <span>Workspace-scoped access</span>
+            </div>
+            <div className="trust-item">
+              <span className="trust-icon">▤</span>
+              <span>Multi-warehouse connectors</span>
+            </div>
+            <div className="trust-item">
+              <span className="trust-icon">◉</span>
+              <span>Role-based access control</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="auth-left-orb auth-left-orb--1" />
+        <div className="auth-left-orb auth-left-orb--2" />
+        <div className="auth-left-grid" />
+      </div>
+
+      <div className="auth-right">
+        <div className="auth-panel">
+
+          <div className="auth-panel-brand">
+            <span className="auth-logo-mark auth-logo-mark--sm">K</span>
+            <span className="auth-wordmark auth-wordmark--sm">KONTEXA</span>
+          </div>
+
+          <div className="auth-panel-header">
+            <h2 className="auth-panel-title">Sign in to Kontexa</h2>
+            <p className="auth-panel-sub">
+              Access your enterprise analytics workspace.
+            </p>
+          </div>
+
+          <form className="auth-form" onSubmit={handleSubmit} noValidate>
+            <div className="auth-field">
+              <label className="auth-label" htmlFor="workspace">Workspace ID</label>
+              <input
+                id="workspace"
+                className="auth-input"
+                type="text"
+                value={workspaceId}
+                onChange={(e) => setWorkspaceId(e.target.value)}
+                placeholder="your workspace id"
+                autoComplete="username"
+                required
+              />
+            </div>
+
+            <div className="auth-field">
+              <label className="auth-label" htmlFor="password">Password</label>
+              <div className="auth-input-wrap">
+                <input
+                  id="password"
+                  className="auth-input"
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••••••"
+                  autoComplete="current-password"
+                  required
+                />
+                <button
+                  type="button"
+                  className="auth-show-pw"
+                  onClick={() => setShowPassword((v) => !v)}
+                  tabIndex={-1}
+                >
+                  {showPassword ? 'Hide' : 'Show'}
+                </button>
+              </div>
+            </div>
+
+            {errorMessage && (
+              <div className="auth-error">
+                <span className="auth-error-icon">!</span>
+                {errorMessage}
+              </div>
+            )}
+
+            <button type="submit" className="auth-submit" disabled={isSubmitting}>
+              {isSubmitting ? <span className="auth-spinner" /> : 'Sign in'}
             </button>
           </form>
-          {errorMessage ? <p className="signin-error">{errorMessage}</p> : null}
-          <p className="signin-back-link">
-            <Link to="/">Back to home</Link>
+
+          <p className="auth-back">
+            <Link to="/reset-password">Forgot password?</Link>
+            <span className="auth-back-sep"> · </span>
+            <Link to="/">← Back to home</Link>
           </p>
-        </section>
-      </main>
+
+          <p className="auth-sso-note">SSO (Okta, Azure AD) — coming soon</p>
+        </div>
+      </div>
     </div>
   );
 }

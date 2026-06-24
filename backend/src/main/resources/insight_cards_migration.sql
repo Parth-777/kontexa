@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS insight_cards (
     metric_highlights TEXT,                 -- [{label, value}, ...]
     reasons          TEXT,                  -- ["reason 1", "reason 2"]
     strategies       TEXT,                  -- ["strategy 1", "strategy 2"]
+    chart_spec       TEXT,                  -- optional JSON chart spec for frontend rendering
 
     -- State machine
     status           VARCHAR(30)  NOT NULL DEFAULT 'AWAITING_CONFIRMATION',

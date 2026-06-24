@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { getCataloguePreview, updateCatalogue } from '../api/catalogueApi';
+import { getSession } from '../api/session';
 import './TenantCataloguePage.css';
 
 function TenantCataloguePage() {
   const { catalogueId } = useParams();
   const navigate = useNavigate();
-  const tenantSession = JSON.parse(window.sessionStorage.getItem('kontexaTenantSession') || '{}');
+  const tenantSession = getSession() || {};
   const tenantId = tenantSession.tenantId || '';
   const tenantSchema = tenantSession.tenantSchema || '';
 

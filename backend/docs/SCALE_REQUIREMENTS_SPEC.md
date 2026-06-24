@@ -148,11 +148,98 @@ Reference: [SCALE_MILLION_ROW_TABLES.md](./SCALE_MILLION_ROW_TABLES.md).
 
 ### 5.7 Metrics rollup layer (FR-ROLLUP) — Phase 4
 
+> **Terminology:** Phase 4 is **rollup** (pre-aggregated daily metrics stored in Kontexa), **not rollback** (reverting code or data). Agents read rollups instead of scanning the 10M-row warehouse table when rules below pass.  
+> **Plain-language guide:** [SCALE_ROLLUP_HOW_IT_WORKS.md](./SCALE_ROLLUP_HOW_IT_WORKS.md)
+
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| **FR-ROLLUP-01** | System MAY maintain `daily_metric_rollups` in Kontexa DB per tenant/table/date/dimensions. | P3 |
-| **FR-ROLLUP-02** | LARGE FACT agents SHALL prefer rollup source when available and fresh (&lt; 36h). | P3 |
-| **FR-ROLLUP-03** | Rollup job SHALL be idempotent and safe to re-run. | P3 |
+| **FR-ROLLUP-01** | System SHALL maintain `daily_metric_rollups` in Kontexa DB for eligible tables only (see §5.8). | P3 |
+| **FR-ROLLUP-02** | Analysis runs SHALL select data source via deterministic `RollupReadinessEvaluator` (see §5.8) — never ad hoc. | P3 |
+| **FR-ROLLUP-03** | Rollup build job SHALL be idempotent (UPSERT on natural key) and safe to re-run. | P3 |
+| **FR-ROLLUP-04** | Rollup build SHALL validate sample equivalence vs windowed warehouse SQL before marking `status=READY`. | P3 |
+| **FR-ROLLUP-05** | If rollup path is not `READY`, agents SHALL fall back to Phase 2 windowed live SQL automatically. | P3 |
+
+### 5.8 Rollup eligibility and decision metrics (normative)
+
+Rollup usage is **rule-based**. No random table/metric selection.
+
+#### 5.8.1 When to build rollups (eligibility — all must be true)
+
+| # | Criterion | Source | Threshold |
+|---|-----------|--------|-----------|
+| E1 | Table scale tier | `TableScalePolicy` | `LARGE` (`rowCount` ≥ 1,000,000) |
+| E2 | Table role | Star schema / catalogue | `FACT` (not `DIMENSION`) |
+| E3 | Date column | `KpiDetectorService.ColumnHints` | Non-null `dateCol` |
+| E4 | Metric columns | Catalogue + semantic enricher | ≥ 1 column with `aggregationMethod` ∈ {SUM, COUNT, AVG} |
+| E5 | Feature enabled | Config / tenant | `kontexa.scale.rollup.enabled=true` |
+| E6 | Warehouse reachable | Readiness check | Same as agent run |
+
+If any criterion fails → **do not build** rollups for that table; use live windowed SQL (Phases 1–3).
+
+#### 5.8.2 What to rollup (grain and dimensions — derived from catalogue)
+
+Not all columns are rolled up. Selection is **fixed algorithm**:
+
+| Field | Rule |
+|-------|------|
+| **Time grain** | `daily` default; if `dateGranularity` = `weekly` or `monthly` on date column, use that grain instead |
+| **Date range** | Last `kontexa.scale.window.large-days` (default 90) ending at `dataMax` or warehouse `MAX(date)` |
+| **Metrics** | Up to `kontexa.scale.large.max-metrics` (default 2): numeric columns with enricher `aggregationMethod` SUM/COUNT/AVG, ordered by METRIC keyword score in `KpiDetectorService` |
+| **Dimensions** | Up to 3 columns: string columns matching DIMENSION keywords in `KpiDetectorService`, ordered by score; stored as `(dimension_key, dimension_value)` per row |
+| **Aggregates per cell** | One row per `(client_id, table_name, metric_date, dimension_key, dimension_value, metric_name)` with `metric_value` = SUM/COUNT/AVG per enricher |
+
+**Excluded:** IDs, free-text blobs, columns with `aggregationMethod=NONE`, more than cap metrics/dims.
+
+#### 5.8.3 When to read rollups during `analyse()` (readiness — all must be true)
+
+`RollupReadinessEvaluator` returns `USE_ROLLUP` or `USE_LIVE_SQL`:
+
+| # | Metric | Measurement | Pass threshold |
+|---|--------|-------------|----------------|
+| R1 | **Freshness** | `now - max(rollup.built_at)` | ≤ `kontexa.scale.rollup.max-age-hours` (default 36) |
+| R2 | **Date coverage** | Days with ≥1 rollup row in window / days in window | ≥ `kontexa.scale.rollup.min-coverage-pct` (default 85%) |
+| R3 | **Metric coverage** | Required metrics from §5.8.2 present in rollup | 100% |
+| R4 | **Build status** | `rollup_build_status.status` for `(client, table)` | `READY` (not `BUILDING`, `FAILED`, `STALE`) |
+| R5 | **Volume sanity** | \|rollup row count sum − warehouse COUNT(*)\| / COUNT(*) | ≤ `kontexa.scale.rollup.max-count-drift-pct` (default 5%); if fail → trigger rebuild, **USE_LIVE_SQL** this run |
+| R6 | **Equivalence (at build time)** | On last build: compare monthly totals rollup vs one windowed BQ/SF query per metric | Relative error ≤ 0.1% per metric; else `FAILED` and live SQL |
+
+If any R* fails → **USE_LIVE_SQL** for that table; log reason code (`ROLLUP_STALE`, `ROLLUP_INCOMPLETE`, etc.).
+
+#### 5.8.4 Why “&lt; 10 warehouse queries” (Phase 4 gate — derived, not arbitrary)
+
+For a LARGE FACT table on rollup path:
+
+| Step | Warehouse queries | Notes |
+|------|-------------------|--------|
+| Rollup refresh (if stale) | 0–3 | One GROUP BY per metric (+ optional COUNT validation) |
+| Agent trend/KPI/distribution | **0** | Read Postgres `daily_metric_rollups` |
+| Profile / anomaly buckets | **0** | Derived from rollup series in JVM |
+| Volume sanity (optional) | 0–1 | Only if R5 scheduled |
+
+**Target:** ≤ 3 warehouse queries on steady state (rollup fresh); ≤ 10 after rebuild or validation. Gate fails if agent run exceeds 10 **and** `dataSource=ROLLUP` was selected.
+
+#### 5.8.5 Rollup build status state machine
+
+```mermaid
+stateDiagram-v2
+  [*] --> NOT_ELIGIBLE: eligibility fails
+  [*] --> PENDING: eligibility passes
+  PENDING --> BUILDING: job started
+  BUILDING --> READY: R5 and R6 pass at build
+  BUILDING --> FAILED: error or equivalence fail
+  READY --> STALE: freshness or coverage fails
+  STALE --> BUILDING: rebuild triggered
+  FAILED --> BUILDING: manual or scheduled retry
+```
+
+#### 5.8.6 Observability (required fields per table per run)
+
+Log and persist on `agent_runs` / per-table sub-record:
+
+- `rollupDecision`: `USE_ROLLUP` | `USE_LIVE_SQL`
+- `rollupReasonCodes`: e.g. `FRESH`, `INCOMPLETE_METRICS`
+- `warehouseQueriesUsed`
+- `rollupCoveragePct`, `rollupAgeHours`, `countDriftPct`
 
 ---
 
@@ -224,6 +311,14 @@ kontexa.scale.scheduler.parallel-tenants=3
 kontexa.scale.large.max-metrics=2
 kontexa.scale.large.max-dimensions=1
 kontexa.scale.large.skip-root-cause=true
+
+# Rollups (Phase 4)
+kontexa.scale.rollup.enabled=false
+kontexa.scale.rollup.max-age-hours=36
+kontexa.scale.rollup.min-coverage-pct=85
+kontexa.scale.rollup.max-count-drift-pct=5
+kontexa.scale.rollup.equivalence-max-relative-error=0.001
+kontexa.scale.rollup.max-warehouse-queries-per-table=10
 ```
 
 ---
@@ -251,8 +346,12 @@ kontexa.scale.large.skip-root-cause=true
 
 ### Phase 4 gate
 
-- [ ] Rollup-backed analysis on LARGE FACT completes with &lt; 10 warehouse queries
-- [ ] Rollup refresh job documented and idempotent
+- [ ] Only tables passing §5.8.1 eligibility get rollups built
+- [ ] `RollupReadinessEvaluator` unit tests cover each fail reason (R1–R6) → `USE_LIVE_SQL`
+- [ ] LARGE FACT with `rollupDecision=USE_ROLLUP`: warehouse queries ≤ 10 (steady state ≤ 3)
+- [ ] Build job idempotent: two consecutive builds → same row count per natural key
+- [ ] Equivalence check (R6): rollup monthly total within 0.1% of windowed live SQL for each metric
+- [ ] When rollup `FAILED` or `STALE`, analyse() still completes via live SQL fallback
 
 ---
 
@@ -276,7 +375,7 @@ kontexa.scale.large.skip-root-cause=true
 | Guard rejects valid LLM chat SQL | Clear error to user; prompt rules for aggregates |
 | Parallel scheduler overloads warehouse | Configurable pool size; per-tenant query cap |
 | Stale `rowCount` mis-classifies tier | Refresh on schedule; log effective tier |
-| Phase 4 rollup drift | Freshness check; fallback to windowed SQL |
+| Phase 4 rollup drift | R5 count drift + R6 equivalence; auto `STALE` + live SQL fallback |
 
 ---
 
@@ -290,7 +389,7 @@ kontexa.scale.large.skip-root-cause=true
 | FR-ANOMALY-* | `AnomalyAgent`, `TrendAgent` integration |
 | FR-SCHED-* | `AgentScheduler`, `agent_runs` entity/repo |
 | FR-LLM-* | `AgentOrchestrator` prompt builders, `InsightNarrativeEnricher` |
-| FR-ROLLUP-* | `MetricRollupService`, migration, agents |
+| FR-ROLLUP-* | `MetricRollupService`, `RollupReadinessEvaluator`, `rollup_build_status`, agents |
 
 ---
 
@@ -299,3 +398,4 @@ kontexa.scale.large.skip-root-cause=true
 | Version | Date | Author | Change |
 |---------|------|--------|--------|
 | 1.0 | 2026-05-21 | Kontexa engineering | Initial requirements from scale plan |
+| 1.1 | 2026-05-21 | Kontexa engineering | §5.8 rollup eligibility, readiness metrics R1–R6, Phase 4 gate clarified |

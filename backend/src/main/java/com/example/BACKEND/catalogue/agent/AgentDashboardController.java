@@ -2,6 +2,8 @@ package com.example.BACKEND.catalogue.agent;
 
 import com.example.BACKEND.catalogue.entity.AgentReportEntity;
 import com.example.BACKEND.catalogue.entity.InsightCardEntity;
+import com.example.BACKEND.catalogue.charts.DynamicChartResponse;
+import com.example.BACKEND.catalogue.charts.DynamicChartService;
 import com.example.BACKEND.catalogue.repository.AgentReportRepository;
 import com.example.BACKEND.tenant.TenantContextResolver;
 import org.springframework.http.ResponseEntity;
@@ -34,17 +36,20 @@ public class AgentDashboardController {
     private final TenantContextResolver tenantContextResolver;
     private final ReportGenerationAgent reportAgent;
     private final AgentReportRepository reportRepository;
+    private final DynamicChartService   dynamicChartService;
 
     public AgentDashboardController(
             AgentOrchestrator    agentOrchestrator,
             TenantContextResolver tenantContextResolver,
             ReportGenerationAgent reportAgent,
-            AgentReportRepository reportRepository
+            AgentReportRepository reportRepository,
+            DynamicChartService dynamicChartService
     ) {
         this.agentOrchestrator  = agentOrchestrator;
         this.tenantContextResolver = tenantContextResolver;
         this.reportAgent        = reportAgent;
         this.reportRepository   = reportRepository;
+        this.dynamicChartService = dynamicChartService;
     }
 
     /** Triggers a fresh analysis + persists new insight cards. */
@@ -81,6 +86,50 @@ public class AgentDashboardController {
         }
         List<InsightCardEntity> cards = agentOrchestrator.getActiveInsights(clientId);
         return ResponseEntity.ok(cards);
+    }
+
+    /**
+     * GET /api/agent/charts
+     * Returns chart specs for the sidebar panel beside the Agent Feed (stacked under the panel header).
+     * Poll alongside GET /api/agent/insights after refresh.
+     */
+    @GetMapping("/charts")
+    public ResponseEntity<?> getCharts(
+            @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
+            @RequestParam(value = "clientId", required = false) String clientIdParam
+    ) {
+        String clientId = clientIdHeader != null && !clientIdHeader.isBlank()
+                ? clientIdHeader : clientIdParam;
+        if (clientId == null || clientId.isBlank()) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "clientId is required"));
+        }
+        return ResponseEntity.ok(agentOrchestrator.getChartPanel(clientId));
+    }
+
+    /**
+     * POST /api/agent/charts/generate
+     * Natural-language chart builder — e.g. "Generate a bar chart of revenue by payment type".
+     */
+    @PostMapping("/charts/generate")
+    public ResponseEntity<?> generateChart(
+            @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
+            @RequestBody Map<String, Object> body
+    ) {
+        String clientId = tenantContextResolver.resolveClientId(clientIdHeader, body);
+        if (clientId == null || clientId.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "clientId is required"));
+        }
+        String request = body.get("request") == null ? null : String.valueOf(body.get("request")).trim();
+        if (request == null || request.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "request is required"));
+        }
+        try {
+            return ResponseEntity.ok(
+                    DynamicChartResponse.from(dynamicChartService.generate(request, clientId)));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
     }
 
     /**
@@ -187,7 +236,9 @@ public class AgentDashboardController {
                     .body(Map.of("error", "status must be COMPLETED (mark as read) or DECLINED (dismiss)"));
         }
 
-        boolean updated = agentOrchestrator.updateInsightStatus(cardId, clientId, newStatus);
+        String dismissReason = body.get("dismissReason");
+        boolean updated = agentOrchestrator.updateInsightStatus(
+                cardId, clientId, newStatus, dismissReason);
         if (!updated) {
             return ResponseEntity.notFound().build();
         }

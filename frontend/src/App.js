@@ -1,28 +1,21 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import HomePage from './pages/HomePage';
 import SignInPage from './pages/SignInPage';
+import AcceptInvitePage from './pages/AcceptInvitePage';
+import ActivateInvitePage from './pages/ActivateInvitePage';
+import ResetPasswordPage from './pages/ResetPasswordPage';
 import TenantCataloguePage from './pages/TenantCataloguePage';
 import TenantDashboardPage from './pages/TenantDashboardPage';
 import UserDashboardPage from './pages/UserDashboardPage';
+import { getSession, isAdminRole } from './api/session';
 import './App.css';
 
-function isTenantAuthenticated() {
-  const session = window.sessionStorage.getItem('kontexaTenantSession');
-  return Boolean(session);
-}
-
-function isUserAuthenticated() {
-  const session = window.sessionStorage.getItem('kontexaUserSession');
-  return Boolean(session);
-}
-
-function RequireTenantAuth({ children }) {
-  if (!isTenantAuthenticated()) return <Navigate to="/signin" replace />;
-  return children;
-}
-
-function RequireUserAuth({ children }) {
-  if (!isUserAuthenticated()) return <Navigate to="/signin" replace />;
+function RequireAuth({ children, adminOnly = false }) {
+  const session = getSession();
+  if (!session) return <Navigate to="/signin" replace />;
+  if (adminOnly && !isAdminRole(session.role)) {
+    return <Navigate to="/user/dashboard" replace />;
+  }
   return children;
 }
 
@@ -31,28 +24,31 @@ function App() {
     <Routes>
       <Route path="/" element={<HomePage />} />
       <Route path="/signin" element={<SignInPage />} />
+      <Route path="/activate-invite" element={<ActivateInvitePage />} />
+      <Route path="/accept-invite" element={<AcceptInvitePage />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route
         path="/tenant/dashboard"
         element={
-          <RequireTenantAuth>
+          <RequireAuth adminOnly>
             <TenantDashboardPage />
-          </RequireTenantAuth>
+          </RequireAuth>
         }
       />
       <Route
         path="/tenant/catalogue/:catalogueId"
         element={
-          <RequireTenantAuth>
+          <RequireAuth adminOnly>
             <TenantCataloguePage />
-          </RequireTenantAuth>
+          </RequireAuth>
         }
       />
       <Route
         path="/user/dashboard"
         element={
-          <RequireUserAuth>
+          <RequireAuth>
             <UserDashboardPage />
-          </RequireUserAuth>
+          </RequireAuth>
         }
       />
       <Route path="/dashboard" element={<Navigate to="/tenant/dashboard" replace />} />

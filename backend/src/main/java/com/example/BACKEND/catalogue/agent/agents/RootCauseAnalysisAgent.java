@@ -1,10 +1,13 @@
 package com.example.BACKEND.catalogue.agent.agents;
 
 import com.example.BACKEND.catalogue.agent.AgentDashboardResult;
+import com.example.BACKEND.catalogue.agent.EnrichedColInfo;
 import com.example.BACKEND.catalogue.agent.TableContext;
+import com.example.BACKEND.catalogue.agent.executive.ExecutiveVoice;
+import com.example.BACKEND.catalogue.agent.executive.MeetingReadyInsightPolisher;
+import com.example.BACKEND.catalogue.agent.scale.AgentSqlHelper;
+import com.example.BACKEND.catalogue.agent.scale.ScaleAwareQueryExecutor;
 import com.example.BACKEND.catalogue.llm.OpenAiClient;
-import com.example.BACKEND.tenant.BigQueryConnectorService;
-import com.example.BACKEND.tenant.SnowflakeConnectorService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
@@ -12,6 +15,7 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Investigates the root cause of statistical anomalies using the ReAct pattern.
@@ -42,19 +46,16 @@ public class RootCauseAnalysisAgent {
 
     private final OpenAiClient             openAiClient;
     private final ObjectMapper             objectMapper;
-    private final BigQueryConnectorService bigQueryConnectorService;
-    private final SnowflakeConnectorService snowflakeConnectorService;
+    private final ScaleAwareQueryExecutor  queryExecutor;
 
     public RootCauseAnalysisAgent(
             OpenAiClient              openAiClient,
             ObjectMapper              objectMapper,
-            BigQueryConnectorService  bigQueryConnectorService,
-            SnowflakeConnectorService snowflakeConnectorService
+            ScaleAwareQueryExecutor   queryExecutor
     ) {
-        this.openAiClient              = openAiClient;
-        this.objectMapper              = objectMapper;
-        this.bigQueryConnectorService  = bigQueryConnectorService;
-        this.snowflakeConnectorService = snowflakeConnectorService;
+        this.openAiClient    = openAiClient;
+        this.objectMapper    = objectMapper;
+        this.queryExecutor   = queryExecutor;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -212,22 +213,29 @@ public class RootCauseAnalysisAgent {
 
         prompt.append("Based on the QUERY RESULTS above (not the investigation plans), respond with JSON:\n");
         prompt.append("{\n");
-        prompt.append("  \"title\": \"Root cause: <specific one-line finding with numbers>\",\n");
-        prompt.append("  \"conclusion\": \"2-3 sentence explanation of the root cause with specific data points\",\n");
+        prompt.append("  \"title\": \"Slide headline: [metric] [direction] [%] — [P&L implication] (max 14 words, NO 'Root cause:' prefix)\",\n");
+        prompt.append("  \"conclusion\": \"ONE sentence So What — stakes for leadership. Must NOT repeat the title.\",\n");
+        prompt.append("  \"badge\": \"ALERT | OPPORTUNITY | RISK (revenue/volume up = OPPORTUNITY; margin down = ALERT)\",\n");
         prompt.append("  \"reasons\": [\n");
-        prompt.append("    \"Past-tense finding with numbers from the query results\",\n");
-        prompt.append("    \"Second finding — what drove the change, citing dates/values\"\n");
+        prompt.append("    \"Past-tense driver with $ or % from Found data\",\n");
+        prompt.append("    \"Second driver with date or segment\"\n");
         prompt.append("  ],\n");
-        prompt.append("  \"strategies\": [\"concrete business action 1\", \"concrete business action 2\"],\n");
-        prompt.append("  \"metricHighlights\": [{\"label\": \"...\", \"value\": \"...\"}],\n");
+        prompt.append("  \"strategies\": [\n");
+        prompt.append("    \"Owner — specific lever — measurable target — timeframe\",\n");
+        prompt.append("    \"Owner — specific lever — measurable target — timeframe\"\n");
+        prompt.append("  ],\n");
+        prompt.append("  \"metricHighlights\": [{\"label\": \"Size|Change|Driver\", \"value\": \"formatted $ or %\"}],\n");
         prompt.append("  \"confidence\": 0-100\n");
         prompt.append("}\n");
-        prompt.append("NEVER put investigation plans in reasons. Only established facts from the Found: data.");
+        prompt.append("NEVER put investigation plans in reasons. Only facts from Found: data.");
 
         try {
             String response = openAiClient.chat(
-                    "You conclude root-cause investigations for executives. " +
-                    "Write reasons as past-tense facts with numbers. Never say 'I will analyze' or 'To investigate'.",
+                    ExecutiveVoice.PERSONA + """
+                            Conclude this root-cause investigation for the CEO.
+                            Write reasons as past-tense facts with $ and % formatted (no scientific notation).
+                            Never say 'I will analyze' or 'To investigate'. Use plain-English metric names only.
+                            """,
                     prompt.toString()
             );
 
@@ -241,7 +249,12 @@ public class RootCauseAnalysisAgent {
                     "HIGH"
             );
 
-            card.setBadge(anomaly.getDirection().equals("DOWN") ? "ALERT" : "RISK");
+            String badge = node.path("badge").asText("").trim().toUpperCase();
+            if (badge.isBlank() || !Set.of("ALERT", "RISK", "OPPORTUNITY", "INFO").contains(badge)) {
+                MeetingReadyInsightPolisher.applyProgrammaticBadge(card);
+            } else {
+                card.setBadge(badge);
+            }
             card.setAgentName("Root Cause agent");
 
             // Reasons/strategies: LLM synthesis only (ReAct steps stay internal)
@@ -259,15 +272,19 @@ public class RootCauseAnalysisAgent {
             List<AgentDashboardResult.MetricHighlight> highlights = new ArrayList<>();
             for (JsonNode h : node.path("metricHighlights")) {
                 highlights.add(new AgentDashboardResult.MetricHighlight(
-                        h.path("label").asText(""), h.path("value").asText("")));
+                        ExecutiveVoice.humanizeMetric(h.path("label").asText("")),
+                        formatHighlightValue(h.path("value").asText(""))));
             }
             // Always include the anomaly magnitude as first highlight
             highlights.add(0, new AgentDashboardResult.MetricHighlight(
-                    anomaly.getMetric() + " change",
+                    ExecutiveVoice.humanizeMetric(anomaly.getMetric()) + " change",
                     (anomaly.getDirection().equals("DOWN") ? "-" : "+") +
-                    String.format("%.1f%%", absPct)));
+                    ExecutiveVoice.formatPercent(absPct)));
             if (highlights.size() > 3) highlights = highlights.subList(0, 3);
             card.setMetricHighlights(highlights);
+
+            card.setTitle(MeetingReadyInsightPolisher.stripRootCausePrefixPublic(card.getTitle()));
+            MeetingReadyInsightPolisher.dedupeTitleAndDescription(card);
 
             System.out.printf("[RootCause] Concluded investigation for %s (confidence=%d)%n",
                     anomaly.getMetric(), node.path("confidence").asInt(70));
@@ -338,24 +355,100 @@ public class RootCauseAnalysisAgent {
         return sb.toString().trim();
     }
 
-    private List<Map<String, Object>> safeExecute(String sql, TableContext ctx) {
-        try {
-            if (ctx.useBQ() && ctx.bqCfg().isPresent()) {
-                var c = ctx.bqCfg().get();
-                return bigQueryConnectorService.executeSelect(
-                        c.projectId(), c.serviceAccountJson(), c.location(), c.dataset(), sql);
-            } else if (ctx.useSF() && ctx.sfCfg().isPresent()) {
-                var c = ctx.sfCfg().get();
-                return snowflakeConnectorService.executeSelect(
-                        c.account(), c.warehouse(), c.database(),
-                        c.schema(), c.username(), c.password(), sql);
-            } else {
-                return ctx.jdbcTemplate().queryForList(sql);
+    /**
+     * Bounded drill-down for LARGE tables (no ReAct) — 1–2 aggregate queries only.
+     */
+    public List<AgentDashboardResult.InsightCard> investigateWithTemplates(
+            List<AgentDashboardResult.Anomaly> anomalies,
+            TableContext ctx,
+            JsonNode catalogueNode
+    ) {
+        List<AgentDashboardResult.InsightCard> cards = new ArrayList<>();
+        for (AgentDashboardResult.Anomaly anomaly : anomalies) {
+            if (Math.abs(anomaly.getChangePercent()) < HIGH_CHANGE_THRESHOLD) continue;
+            try {
+                cards.add(buildTemplateCard(anomaly, ctx, catalogueNode));
+            } catch (Exception e) {
+                System.out.printf("[RootCause] Template drill-down failed for %s: %s%n",
+                        anomaly.getMetric(), e.getMessage());
             }
-        } catch (Exception e) {
-            System.out.printf("[RootCause] SQL execution failed: %s%n", e.getMessage());
+        }
+        return cards;
+    }
+
+    private AgentDashboardResult.InsightCard buildTemplateCard(
+            AgentDashboardResult.Anomaly anomaly,
+            TableContext ctx,
+            JsonNode catalogueNode
+    ) {
+        String metric = anomaly.getMetric();
+        String metricRef = AgentSqlHelper.qualify(metric, ctx.provider());
+        String driverSegment = "overall";
+
+        if (!ctx.hints().stringCols().isEmpty()) {
+            String dim = ctx.hints().stringCols().get(0);
+            String dimRef = AgentSqlHelper.qualify(dim, ctx.provider());
+            EnrichedColInfo metricInfo = ctx.enriched().get(metric.toLowerCase());
+            String agg = (metricInfo != null && List.of("SUM", "COUNT", "AVG").contains(metricInfo.aggregationMethod()))
+                    ? metricInfo.aggregationMethod() : "SUM";
+            String aggExpr = switch (agg) {
+                case "COUNT" -> "COUNT(" + metricRef + ")";
+                case "AVG" -> "AVG(" + metricRef + ")";
+                default -> "SUM(" + metricRef + ")";
+            };
+            String sql = String.format(
+                    "SELECT %s AS segment, %s AS seg_value FROM %s " +
+                    "GROUP BY 1 ORDER BY seg_value DESC LIMIT 5",
+                    dimRef, aggExpr, AgentSqlHelper.fromWithPredicates(ctx, dimRef + " IS NOT NULL"));
+            List<Map<String, Object>> rows = queryExecutor.execute(sql, "RootCause template segment", ctx);
+            if (!rows.isEmpty() && rows.get(0).get("segment") != null) {
+                driverSegment = rows.get(0).get("segment").toString();
+            }
+        }
+
+        String direction = anomaly.getDirection().equals("DOWN") ? "declined" : "increased";
+        double absPct = Math.abs(anomaly.getChangePercent());
+        String title = ExecutiveVoice.humanizeMetric(metric) + " " + direction + " "
+                + ExecutiveVoice.formatPercent(absPct) + " — " + driverSegment + " leads within window";
+
+        AgentDashboardResult.InsightCard card = new AgentDashboardResult.InsightCard(
+                title,
+                driverSegment.equals("overall")
+                        ? "The shift is concentrated in the latest analysis window and warrants a targeted operational review."
+                        : driverSegment + " is the largest contributor to the " + ExecutiveVoice.humanizeMetric(metric)
+                        + " move in the analysis window.",
+                "HIGH"
+        );
+        MeetingReadyInsightPolisher.applyProgrammaticBadge(card);
+        card.setAgentName("Root Cause agent");
+        card.setReasons(List.of(
+                ExecutiveVoice.humanizeMetric(metric) + " " + direction + " "
+                        + ExecutiveVoice.formatPercent(absPct) + " vs the prior monthly run-rate.",
+                "Top segment in window: " + driverSegment + " (from guarded aggregate query)."
+        ));
+        card.setStrategies(List.of(
+                "Finance — validate " + ExecutiveVoice.humanizeMetric(metric) + " drivers in "
+                        + driverSegment + " — reconcile to plan within 14 days",
+                "Ops — assign owner for " + driverSegment + " corrective actions — next 30 days"
+        ));
+        card.setMetricHighlights(List.of(
+                new AgentDashboardResult.MetricHighlight(
+                        ExecutiveVoice.humanizeMetric(metric) + " change",
+                        (anomaly.getDirection().equals("DOWN") ? "-" : "+") + ExecutiveVoice.formatPercent(absPct)),
+                new AgentDashboardResult.MetricHighlight("Driver", driverSegment),
+                new AgentDashboardResult.MetricHighlight("Window",
+                        ctx.window().active() ? ctx.window().start() + " → " + ctx.window().end() : "90d")
+        ));
+        card.setSourceColumns(List.of(metric));
+        return card;
+    }
+
+    private List<Map<String, Object>> safeExecute(String sql, TableContext ctx) {
+        if (sql == null || !sql.trim().toUpperCase().startsWith("SELECT")) {
+            System.out.printf("[RootCause] Rejected non-SELECT SQL%n");
             return List.of();
         }
+        return queryExecutor.execute(sql, "RootCause ReAct", ctx);
     }
 
     private AgentDashboardResult.InsightCard buildFallbackCard(
@@ -388,6 +481,19 @@ public class RootCauseAnalysisAgent {
                         String.format("%.1f%%", Math.abs(anomaly.getChangePercent())))
         ));
         return card;
+    }
+
+    private String formatHighlightValue(String raw) {
+        if (raw == null || raw.isBlank()) return raw;
+        try {
+            double d = Double.parseDouble(raw.replace(",", "").trim());
+            if (raw.contains("E") || raw.contains("e") || Math.abs(d) >= 10_000) {
+                return ExecutiveVoice.formatValue(d);
+            }
+        } catch (NumberFormatException ignored) {
+            // keep literal
+        }
+        return raw;
     }
 
     // ── Internal value objects ────────────────────────────────────────────────

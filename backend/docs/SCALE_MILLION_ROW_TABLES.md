@@ -6,6 +6,7 @@ This document consolidates how the agent system works today, what happens at ~10
 
 - **[SCALE_REQUIREMENTS_SPEC.md](./SCALE_REQUIREMENTS_SPEC.md)** — functional/non-functional requirements, acceptance gates, config
 - **[SCALE_IMPLEMENTATION_PLAN.md](./SCALE_IMPLEMENTATION_PLAN.md)** — phased tasks, file list, estimates, rollout
+- **[SCALE_ROLLUP_HOW_IT_WORKS.md](./SCALE_ROLLUP_HOW_IT_WORKS.md)** — how rollups work for 10M+ tables (rules, example, readiness)
 
 **Last updated:** May 2026
 

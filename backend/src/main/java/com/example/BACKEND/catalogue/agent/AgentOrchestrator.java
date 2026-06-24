@@ -7,7 +7,30 @@ import com.example.BACKEND.catalogue.agent.agents.KpiPerformanceAgent;
 import com.example.BACKEND.catalogue.agent.agents.ForecastingAgent;
 import com.example.BACKEND.catalogue.agent.agents.RootCauseAnalysisAgent;
 import com.example.BACKEND.catalogue.agent.agents.TrendAgent;
+import com.example.BACKEND.catalogue.agent.scale.AnalysisRunContext;
+import com.example.BACKEND.catalogue.agent.scale.AnalysisWindow;
+import com.example.BACKEND.catalogue.agent.scale.AnalysisWindowFactory;
+import com.example.BACKEND.catalogue.agent.scale.ColumnSelector;
+import com.example.BACKEND.catalogue.agent.scale.ScaleAwareQueryExecutor;
+import com.example.BACKEND.catalogue.agent.scale.ScaleProperties;
+import com.example.BACKEND.catalogue.agent.scale.ScaleTier;
+import com.example.BACKEND.catalogue.agent.executive.ColumnDiscoveryPlanner;
+import com.example.BACKEND.catalogue.agent.executive.ExecutiveMetricPack;
+import com.example.BACKEND.catalogue.agent.executive.ExecutiveNarrator;
+import com.example.BACKEND.catalogue.agent.executive.MeetingReadyInsightPolisher;
+import com.example.BACKEND.catalogue.agent.executive.InsightCandidate;
+import com.example.BACKEND.catalogue.agent.executive.LensInsightCoordinator;
+import com.example.BACKEND.catalogue.agent.executive.MaterialityRanker;
+import com.example.BACKEND.catalogue.agent.executive.SignalSummaryBuilder;
+import com.example.BACKEND.catalogue.charts.ChartPanelItem;
+import com.example.BACKEND.catalogue.charts.ChartPanelResponse;
+import com.example.BACKEND.catalogue.charts.ChartSpec;
+import com.example.BACKEND.catalogue.charts.InsightChartMapper;
+import com.example.BACKEND.catalogue.agent.scale.TableScalePolicy;
+import com.example.BACKEND.catalogue.entity.AgentRunEntity;
+import com.example.BACKEND.catalogue.entity.SignalEntity;
 import com.example.BACKEND.catalogue.entity.InsightCardEntity;
+import com.example.BACKEND.catalogue.repository.AgentRunRepository;
 import com.example.BACKEND.catalogue.llm.OpenAiClient;
 import com.example.BACKEND.catalogue.repository.InsightCardRepository;
 import com.example.BACKEND.catalogue.service.CatalogueApprovalService;
@@ -74,7 +97,22 @@ public class AgentOrchestrator {
     private final CrossTableAgent           crossTableAgent;
     private final RootCauseAnalysisAgent    rootCauseAgent;
     private final ForecastingAgent          forecastingAgent;
-    private final InsightNarrativeEnricher  narrativeEnricher;
+    private final ExecutiveMetricPack       executiveMetricPack;
+    private final SignalSummaryBuilder      signalSummaryBuilder;
+    private final LensInsightCoordinator    lensCoordinator;
+    private final MaterialityRanker         materialityRanker;
+    private final ExecutiveNarrator           executiveNarrator;
+    private final MeetingReadyInsightPolisher meetingReadyPolisher;
+    private final InsightEvidenceValidator  evidenceValidator;
+    private final InsightChartMapper        insightChartMapper;
+    private final TableScalePolicy          tableScalePolicy;
+    private final AnalysisWindowFactory     analysisWindowFactory;
+    private final ScaleAwareQueryExecutor   scaleQueryExecutor;
+    private final TableProfileService       tableProfileService;
+    private final GeneralDiscoveryAgent     generalDiscoveryAgent;
+    private final RevenueModelAgent         revenueModelAgent;
+    private final ScaleProperties           scaleProperties;
+    private final AgentRunRepository        agentRunRepository;
 
     public AgentOrchestrator(
             CatalogueApprovalService    approvalService,
@@ -95,7 +133,22 @@ public class AgentOrchestrator {
             CrossTableAgent             crossTableAgent,
             RootCauseAnalysisAgent      rootCauseAgent,
             ForecastingAgent            forecastingAgent,
-            InsightNarrativeEnricher    narrativeEnricher
+            ExecutiveMetricPack         executiveMetricPack,
+            SignalSummaryBuilder        signalSummaryBuilder,
+            LensInsightCoordinator      lensCoordinator,
+            MaterialityRanker           materialityRanker,
+            ExecutiveNarrator           executiveNarrator,
+            MeetingReadyInsightPolisher meetingReadyPolisher,
+            InsightEvidenceValidator  evidenceValidator,
+            InsightChartMapper          insightChartMapper,
+            TableScalePolicy            tableScalePolicy,
+            AnalysisWindowFactory       analysisWindowFactory,
+            ScaleAwareQueryExecutor     scaleQueryExecutor,
+            TableProfileService         tableProfileService,
+            GeneralDiscoveryAgent       generalDiscoveryAgent,
+            RevenueModelAgent           revenueModelAgent,
+            ScaleProperties             scaleProperties,
+            AgentRunRepository          agentRunRepository
     ) {
         this.approvalService           = approvalService;
         this.kpiDetector               = kpiDetector;
@@ -115,7 +168,22 @@ public class AgentOrchestrator {
         this.crossTableAgent           = crossTableAgent;
         this.rootCauseAgent            = rootCauseAgent;
         this.forecastingAgent          = forecastingAgent;
-        this.narrativeEnricher         = narrativeEnricher;
+        this.executiveMetricPack       = executiveMetricPack;
+        this.signalSummaryBuilder      = signalSummaryBuilder;
+        this.lensCoordinator           = lensCoordinator;
+        this.materialityRanker         = materialityRanker;
+        this.executiveNarrator         = executiveNarrator;
+        this.meetingReadyPolisher      = meetingReadyPolisher;
+        this.evidenceValidator         = evidenceValidator;
+        this.insightChartMapper        = insightChartMapper;
+        this.tableScalePolicy          = tableScalePolicy;
+        this.analysisWindowFactory     = analysisWindowFactory;
+        this.scaleQueryExecutor        = scaleQueryExecutor;
+        this.tableProfileService       = tableProfileService;
+        this.generalDiscoveryAgent    = generalDiscoveryAgent;
+        this.revenueModelAgent        = revenueModelAgent;
+        this.scaleProperties          = scaleProperties;
+        this.agentRunRepository        = agentRunRepository;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -125,6 +193,13 @@ public class AgentOrchestrator {
     public AgentDashboardResult analyse(String clientId) {
         AgentDashboardResult result = new AgentDashboardResult();
         result.setLastUpdated(Instant.now().toString());
+
+        LocalDateTime runStarted = LocalDateTime.now();
+        AnalysisRunContext runContext = new AnalysisRunContext(
+                scaleProperties.getSchedulerMaxQueriesPerTenant(),
+                scaleProperties.getGuardBigqueryMaxBytesPerRun());
+        String runStatus = "SUCCESS";
+        String runError  = null;
 
         try {
             // 1. Readiness check — skip if data source is unreachable or catalogue missing
@@ -160,32 +235,124 @@ public class AgentOrchestrator {
             List<AgentDashboardResult.InsightCard>       forecastCards  = new ArrayList<>();
             List<String>                                 tables         = new ArrayList<>();
             List<KpiDetectorService.ColumnHints>         allHints       = new ArrayList<>();
+            List<SignalEntity>                           signals        = new ArrayList<>();
+
+            // 3b. Signal detection — what changed since last run (executives care first)
+            try {
+                signals = signalSummaryBuilder.detectAndSummarize(clientId, catalogueNode, collected);
+                System.out.printf("[Orchestrator] %d material signal(s) for %s%n", signals.size(), clientId);
+            } catch (Exception e) {
+                System.out.printf("[Orchestrator] Signal detection skipped: %s%n", e.getMessage());
+            }
 
             // 4. Per-table agent loop
             for (JsonNode tableNode : catalogueNode.path("tables")) {
-                KpiDetectorService.ColumnHints hints = kpiDetector.classifyColumns(tableNode);
-                if (hints.tableName().isBlank()) continue;
+                if (runContext.isBudgetExceeded()) {
+                    System.out.printf("[Orchestrator] Query budget exceeded for %s — stopping table loop%n", clientId);
+                    break;
+                }
+
+                KpiDetectorService.ColumnHints rawHints = kpiDetector.classifyColumns(tableNode);
+                if (rawHints.tableName().isBlank()) continue;
+
+                long rowCount = tableNode.path("rowCount").asLong(0);
+                ScaleTier tier = tableScalePolicy.tier(rowCount);
+                String tableRole = tableNode.path("tableRole").asText(null);
+
+                if (tier == ScaleTier.LARGE && tableScalePolicy.requireDateWindow(tier)
+                        && rawHints.dateCol() == null) {
+                    System.out.printf("[Orchestrator] Skipping LARGE table %s — no date column%n",
+                            rawHints.tableName());
+                    continue;
+                }
+
+                Map<String, EnrichedColInfo> enriched = buildEnrichedMap(catalogueNode, rawHints.tableName());
+
+                String tableRef = buildTableRef(rawHints.tableName(), rawHints.tableSchema(), provider);
+                TableContext windowProbeCtx = new TableContext(
+                        clientId,
+                        new KpiDetectorService.ColumnHints(
+                                rawHints.tableName(), rawHints.tableSchema(),
+                                rawHints.dateCol(), rawHints.stringCols(), rawHints.numericCols()),
+                        enriched, tableRef, provider, useBQ, useSF, bqCfg, sfCfg, jdbcTemplate,
+                        tier, rowCount, AnalysisWindow.unrestricted(), runContext, tableRole);
+                AnalysisWindow window = analysisWindowFactory.forTable(rawHints, enriched, tier, windowProbeCtx);
+
+                List<String> metrics = ColumnSelector.selectMetrics(
+                        rawHints.numericCols(), enriched, tableScalePolicy.properties().maxMetrics(tier));
+                List<String> dims = ColumnSelector.selectDimensions(
+                        rawHints.stringCols(), tier, tableScalePolicy.properties().maxDimensions(tier));
+                List<String> distributionDims = ColumnSelector.selectDimensionsForDistribution(
+                        rawHints.stringCols(), tier,
+                        tableScalePolicy.properties().getInsightDistributionDims());
+
+                List<String> scanDims = ColumnDiscoveryPlanner.pickDimensions(
+                        rawHints, tableScalePolicy.properties().getInsightScanDimensions());
+                var discoveryPlan = ColumnDiscoveryPlanner.plan(
+                        rawHints, enriched, 4, scanDims.size());
+                List<String> scanMetrics = new ArrayList<>(metrics);
+                for (String m : discoveryPlan.revenueMetrics()) {
+                    if (!scanMetrics.contains(m)) scanMetrics.add(m);
+                }
+                for (String m : discoveryPlan.behaviorMetrics()) {
+                    if (!scanMetrics.contains(m) && scanMetrics.size() < 5) scanMetrics.add(m);
+                }
+
+                KpiDetectorService.ColumnHints hints = new KpiDetectorService.ColumnHints(
+                        rawHints.tableName(), rawHints.tableSchema(),
+                        rawHints.dateCol(), dims, metrics);
+
+                KpiDetectorService.ColumnHints scanHints = new KpiDetectorService.ColumnHints(
+                        rawHints.tableName(), rawHints.tableSchema(),
+                        rawHints.dateCol(), scanDims, scanMetrics);
 
                 tables.add(hints.tableName());
                 allHints.add(hints);
 
-                String tableRef = buildTableRef(hints.tableName(), hints.tableSchema(), provider);
-                Map<String, EnrichedColInfo> enriched = buildEnrichedMap(catalogueNode, hints.tableName());
-
                 TableContext ctx = new TableContext(
                         clientId, hints, enriched, tableRef, provider,
-                        useBQ, useSF, bqCfg, sfCfg, jdbcTemplate
+                        useBQ, useSF, bqCfg, sfCfg, jdbcTemplate,
+                        tier, rowCount, window, runContext, tableRole
+                );
+                TableContext scanCtx = new TableContext(
+                        clientId, scanHints, enriched, tableRef, provider,
+                        useBQ, useSF, bqCfg, sfCfg, jdbcTemplate,
+                        tier, rowCount, window, runContext, tableRole
                 );
 
-                // 3a. Raw sample — universal fallback, works on any data type
-                safeExecute(buildRawSampleSql(tableRef, hints.dateCol(), provider),
-                        "Sample rows from " + hints.tableName(), ctx, collected);
+                System.out.printf("[Orchestrator] Table %s tier=%s rowCount=%d metrics=%d dims=%d scanDims=%d%n",
+                        hints.tableName(), tier, rowCount, metrics.size(), dims.size(), scanDims.size());
 
-                // 3b. TrendAgent — time-series + dimension breakdowns for metric columns
+                if (tableScalePolicy.allowRawSample(tier)) {
+                    safeExecute(buildRawSampleSql(tableRef, hints.dateCol(), provider),
+                            "Sample rows from " + hints.tableName(), ctx, collected);
+                } else {
+                    collected.addAll(tableProfileService.collectProfile(ctx));
+                }
+
+                // Executive decision metrics (MoM delta, contribution, concentration)
+                collected.addAll(executiveMetricPack.collect(scanCtx));
+
+                // Revenue model — sources, weak areas, trends, factor contribution
+                collected.addAll(revenueModelAgent.collect(
+                        scanCtx, rawHints, scaleProperties.getRevenueMaxProbesPerTable()));
+
+                // General discovery — corridors, zone performance, concentration
+                collected.addAll(generalDiscoveryAgent.collect(
+                        scanCtx, rawHints, scaleProperties.getDiscoveryMaxProbesPerTable()));
+
+                // TrendAgent — time-series + dimension breakdowns for metric columns
                 collected.addAll(trendAgent.collectData(ctx));
 
-                // 3c. DistributionAgent — categorical distributions + monthly volume
-                collected.addAll(distributionAgent.collectData(ctx));
+                // 3c. DistributionAgent — profile up to N dimensions for insight diversity
+                KpiDetectorService.ColumnHints distHints = new KpiDetectorService.ColumnHints(
+                        rawHints.tableName(), rawHints.tableSchema(),
+                        rawHints.dateCol(), distributionDims, metrics);
+                TableContext distCtx = new TableContext(
+                        clientId, distHints, enriched, tableRef, provider,
+                        useBQ, useSF, bqCfg, sfCfg, jdbcTemplate,
+                        tier, rowCount, window, runContext, tableRole);
+                collected.addAll(distributionAgent.collectData(distCtx));
 
                 // 3d. KpiPerformanceAgent — current vs prior period + KPI cards
                 KpiPerformanceAgent.KpiResult kpiResult = kpiPerformanceAgent.collectData(ctx);
@@ -198,16 +365,27 @@ public class AgentOrchestrator {
 
                 // 3f. RootCauseAnalysisAgent — ReAct multi-step drill-down on high anomalies
                 if (!tableAnomalies.isEmpty()) {
-                    List<AgentDashboardResult.InsightCard> rcCards =
-                            rootCauseAgent.investigate(tableAnomalies, ctx, catalogueNode);
-                    rootCauseCards.addAll(rcCards);
+                    if (tableScalePolicy.allowRootCauseReAct(tier)) {
+                        rootCauseCards.addAll(rootCauseAgent.investigate(tableAnomalies, ctx, catalogueNode));
+                    } else if (tier == ScaleTier.LARGE) {
+                        rootCauseCards.addAll(
+                                rootCauseAgent.investigateWithTemplates(tableAnomalies, ctx, catalogueNode));
+                    }
                 }
+            }
+
+            if (runContext.isBudgetExceeded()) {
+                // Budget exhaustion is treated as partial-success, not a user-facing error.
+                // We keep run metadata for observability but return collected insights/cards.
+                runStatus = "PARTIAL";
+                runError = "Query budget reached after " + runContext.queriesRun() + " queries.";
+                result.setErrorMessage(null);
             }
 
             // 5. CrossTableAgent — fact × dimension join analysis
             collected.addAll(crossTableAgent.collectData(
                     clientId, catalogueNode, provider,
-                    useBQ, useSF, bqCfg, sfCfg, jdbcTemplate
+                    useBQ, useSF, bqCfg, sfCfg, jdbcTemplate, runContext
             ));
 
             // 6. ForecastingAgent — extrapolate next 3 periods from collected time-series
@@ -226,9 +404,11 @@ public class AgentOrchestrator {
 
             // 4. Guard: no data → don't call LLM, no hallucinations
             if (collected.isEmpty()) {
+                String hint = maxRowCountInCatalogue(catalogueNode) > 0
+                        ? " Queries returned no rows — check the date column is detected and BigQuery can read MAX/recent dates on the table."
+                        : " Check that the data source is accessible and contains rows.";
                 result.setErrorMessage(
-                        "No data returned from " + String.join(", ", tables) + ". "
-                        + "Check that the data source is accessible and contains rows.");
+                        "No data returned from " + String.join(", ", tables) + "." + hint);
                 result.setConfidence(0);
                 result.setKpiCards(List.of());
                 result.setInsights(List.of());
@@ -244,8 +424,35 @@ public class AgentOrchestrator {
             // 7. Attach anomalies detected in Java (LLM synthesis may add more)
             result.setAnomalies(anomalies);
 
-            // 8. Single LLM synthesis over all collected data
-            synthesize(clientId, catalogueNode, allHints, collected, result);
+            // 8. Lens candidates → materiality rank → executive narration
+            List<InsightCandidate> allCandidates = lensCoordinator.generateAll(
+                    collected, kpiCards, anomalies, signals);
+            List<InsightCandidate> topCandidates = materialityRanker.selectTop(
+                    allCandidates, clientId, 75);
+            System.out.printf("[Orchestrator] Insight candidates: %d total → %d selected (min %d)%n",
+                    allCandidates.size(), topCandidates.size(), MaterialityRanker.MIN_INSIGHT_CARDS);
+
+            if (!topCandidates.isEmpty()) {
+                List<AgentDashboardResult.InsightCard> narrated =
+                        executiveNarrator.narrateCandidates(clientId, topCandidates, collected);
+                List<AgentDashboardResult.InsightCard> verified =
+                        evidenceValidator.filterSupported(narrated, collected);
+                if (verified.isEmpty()) {
+                    System.out.printf(
+                            "[Orchestrator] %d narrated card(s) failed evidence check — using programmatic cards%n",
+                            narrated != null ? narrated.size() : 0);
+                    verified = executiveNarrator.programmaticCards(topCandidates);
+                }
+                result.setInsights(verified);
+                result.setReasoning("Executive pipeline: " + topCandidates.size()
+                        + " verified candidates from " + allCandidates.size() + " lens findings.");
+                result.setConfidence(85);
+            } else {
+                synthesizeFallback(clientId, catalogueNode, allHints, collected, kpiCards, anomalies, result);
+                if (result.getInsights() != null && !result.getInsights().isEmpty()) {
+                    result.setInsights(evidenceValidator.filterSupported(result.getInsights(), collected));
+                }
+            }
 
             // 9. Merge Java-detected anomalies with LLM-detected ones (deduplicate by metric)
             if (!anomalies.isEmpty()) {
@@ -269,10 +476,22 @@ public class AgentOrchestrator {
                 result.setInsights(merged);
             }
 
-            // 10b. OpenAI rewrites reasons + strategies for EVERY card from full collected data
+            // 10b. Meeting-ready polish — slide headlines, distinct So What, specific strategies
             if (result.getInsights() != null && !result.getInsights().isEmpty()) {
-                narrativeEnricher.enrichAll(result.getInsights(), collected);
+                meetingReadyPolisher.polish(clientId, result.getInsights(), collected);
             }
+
+            // 10d. Attach chart specs (backend contract; frontend renders)
+            if (result.getInsights() != null && !result.getInsights().isEmpty()) {
+                attachCharts(result.getInsights(), collected);
+            }
+
+            // 10c. Leadership brief — board-level summary from polished cards (not raw claims)
+            result.setDailyBrief(executiveNarrator.buildDailyBrief(
+                    clientId,
+                    leadershipBriefSources(result.getInsights()),
+                    topCandidates,
+                    collected));
 
             // 11. Apply decision memory — adjust confidence based on past user behaviour
             if (result.getInsights() != null) {
@@ -292,27 +511,55 @@ public class AgentOrchestrator {
             }
 
         } catch (IllegalStateException e) {
+            runStatus = "FAILED";
+            runError = e.getMessage();
             emptyResult(result, "No approved catalogue found. Please approve your catalogue first.");
         } catch (Exception e) {
+            runStatus = "FAILED";
+            runError = e.getMessage();
             emptyResult(result, "Analysis failed: " + e.getMessage());
+        } finally {
+            persistAgentRun(clientId, runStarted, runContext, runStatus, runError);
         }
 
         return result;
+    }
+
+    private void persistAgentRun(String clientId, LocalDateTime started,
+                                  AnalysisRunContext runContext, String status, String error) {
+        try {
+            AgentRunEntity run = new AgentRunEntity();
+            run.setClientId(clientId);
+            run.setStartedAt(started);
+            run.setFinishedAt(LocalDateTime.now());
+            run.setQueriesRun(runContext.queriesRun());
+            run.setBytesScanned(runContext.bytesScanned());
+            run.setBudgetExceeded(runContext.isBudgetExceeded());
+            run.setStatus(status);
+            run.setErrorMessage(error);
+            agentRunRepository.save(run);
+        } catch (Exception e) {
+            System.out.printf("[Orchestrator] Failed to persist agent run for %s: %s%n",
+                    clientId, e.getMessage());
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
     // LLM synthesis  (prompts intentionally match AgentAnalysisService)
     // ─────────────────────────────────────────────────────────────────────────
 
-    private void synthesize(
+    /** Fallback when no lens candidates pass materiality threshold. */
+    private void synthesizeFallback(
             String clientId,
             JsonNode catalogueNode,
             List<KpiDetectorService.ColumnHints> allHints,
             List<CollectedData> collected,
+            List<AgentDashboardResult.KpiCard> kpiCards,
+            List<AgentDashboardResult.Anomaly> anomalies,
             AgentDashboardResult result
     ) {
         String system = buildSystemPrompt();
-        String user   = buildUserPrompt(clientId, catalogueNode, allHints, collected);
+        String user   = buildUserPrompt(clientId, catalogueNode, allHints, collected, kpiCards, anomalies);
         try {
             String llmResponse = openAiClient.chat(system, user);
             parseSynthesisResponse(llmResponse, result);
@@ -334,19 +581,25 @@ public class AgentOrchestrator {
 
     private String buildSystemPrompt() {
         return """
-                You are a senior data analyst. You receive real data samples from a company's database —
-                rows, categorical distributions, and time trends. Your job is to produce a structured feed
-                of insight cards that feel like alerts from an intelligent analyst, not a generic dashboard.
+                You are the Chief Analytics Officer briefing a VP and the executive team.
+                Write like a board-ready briefing: decisive, concise, numbers-first, zero jargon.
 
-                The data can be ANYTHING — retail orders, Netflix content, sales pipeline, stock prices,
-                HR records, delivery logs. Work with whatever is there. Never say the data type limits you.
+                You receive EXECUTIVE HEADLINES (pre-verified KPIs and anomalies) plus supporting query results.
+                Your job: turn them into at most 3 insight cards the VP can act on in under 60 seconds each.
 
-                Look for:
-                - Dominant patterns: what's most common and why it matters to the business
-                - Changes over time: growth, decline, seasonality, sudden spikes or drops
-                - Distribution surprises: unexpected concentrations, missing values, imbalances
-                - Business implications: what does this pattern mean for the company?
-                - Concrete, specific strategies grounded in the actual data shown
+                Voice and structure:
+                - title: "[Metric/segment] [↑/↓] [X%] — [one-line business implication]" (use real labels from data)
+                - description: 1-2 sentences — what happened, so what for revenue/risk/ops, no filler
+                - Lead with the biggest dollar or risk impact; deprioritize trivia
+                - strategies: name an owner (Sales, Product, Finance, Ops, Marketing) + specific action + expected outcome
+                - reasons: past-tense facts with numbers — "Electronics returns hit 18% vs 9% store average"
+
+                The data can be ANY domain (retail, SaaS, logistics, HR). Never say you cannot analyse it.
+
+                Prioritise:
+                - Period-over-period moves in EXECUTIVE HEADLINES
+                - Statistical anomalies and material concentration risks
+                - Trends that change forecast or capacity decisions
 
                 ══════════════════════════════════════════════════════════
                 CRITICAL — DATA FIDELITY (read carefully, violations destroy accuracy):
@@ -416,7 +669,7 @@ public class AgentOrchestrator {
                 }
 
                 RULES:
-                - insights: generate 3-5 cards. Titles use actual column values and real numbers from the data.
+                - insights: generate exactly 2-3 cards (executives ignore more). Prioritise EXECUTIVE HEADLINES.
                 - badge: "ALERT" (critical risk/drop), "RISK" (warning signal), "OPPORTUNITY" (growth gap/win), "INFO" (notable pattern)
                 - agentName: name after the subject analysed (e.g. "Product Performance agent", "Pricing Strategy agent")
                 - metricHighlights: exactly 3 chips — numbers/values DIRECTLY visible in the data rows provided
@@ -438,10 +691,14 @@ public class AgentOrchestrator {
             String clientId,
             JsonNode catalogueNode,
             List<KpiDetectorService.ColumnHints> allHints,
-            List<CollectedData> collected
+            List<CollectedData> collected,
+            List<AgentDashboardResult.KpiCard> kpiCards,
+            List<AgentDashboardResult.Anomaly> anomalies
     ) {
         StringBuilder sb = new StringBuilder();
         sb.append("CLIENT: ").append(clientId).append("\n\n");
+
+        sb.append(buildExecutiveHeadlines(kpiCards, anomalies, collected)).append("\n");
 
         sb.append("SCHEMA OVERVIEW\n===============\n");
         for (KpiDetectorService.ColumnHints hints : allHints) {
@@ -483,9 +740,9 @@ public class AgentOrchestrator {
             sb.append("\n");
         }
 
-        sb.append("Based on ALL the above data, generate the dashboard insight JSON. ");
-        sb.append("Analyse patterns, trends, distributions, and anomalies across every table shown. ");
-        sb.append("Be specific — use actual values from the data, not generic statements.");
+        sb.append("Generate the executive insight JSON. ");
+        sb.append("Start from EXECUTIVE HEADLINES, then support with COLLECTED DATA. ");
+        sb.append("Write for a VP: implication first, evidence second, action third.");
         return sb.toString();
     }
 
@@ -607,27 +864,41 @@ public class AgentOrchestrator {
     // Query execution
     // ─────────────────────────────────────────────────────────────────────────
 
+    private String buildExecutiveHeadlines(
+            List<AgentDashboardResult.KpiCard> kpiCards,
+            List<AgentDashboardResult.Anomaly> anomalies,
+            List<CollectedData> collected) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("EXECUTIVE HEADLINES\n===================\n");
+        if (kpiCards != null) {
+            for (var k : kpiCards) {
+                sb.append("• ").append(k.getMetric()).append(" ")
+                        .append(k.getDirection()).append(" ")
+                        .append(k.getChangePercent()).append("%\n");
+            }
+        }
+        if (anomalies != null) {
+            for (var a : anomalies) {
+                sb.append("• ANOMALY ").append(a.getMetric()).append(": ")
+                        .append(a.getChangePercent()).append("%\n");
+            }
+        }
+        for (CollectedData cd : collected) {
+            if (cd.label() != null && cd.label().startsWith("SIGNALS:")) {
+                sb.append("• Signals dataset attached (").append(cd.rows().size()).append(" changes)\n");
+            }
+            if (cd.label() != null && cd.label().startsWith("EXEC:")) {
+                sb.append("• ").append(cd.label()).append("\n");
+            }
+        }
+        return sb.toString();
+    }
+
     private void safeExecute(String sql, String label, TableContext ctx,
                               List<CollectedData> out) {
-        try {
-            List<Map<String, Object>> rows;
-            if (ctx.useBQ() && ctx.bqCfg().isPresent()) {
-                var c = ctx.bqCfg().get();
-                rows = bigQueryConnectorService.executeSelect(
-                        c.projectId(), c.serviceAccountJson(), c.location(), c.dataset(), sql);
-            } else if (ctx.useSF() && ctx.sfCfg().isPresent()) {
-                var c = ctx.sfCfg().get();
-                rows = snowflakeConnectorService.executeSelect(
-                        c.account(), c.warehouse(), c.database(),
-                        c.schema(), c.username(), c.password(), sql);
-            } else {
-                rows = jdbcTemplate.queryForList(sql);
-            }
-            if (rows != null && !rows.isEmpty()) {
-                out.add(new CollectedData(label, sql, rows));
-            }
-        } catch (Exception e) {
-            System.out.printf("[Orchestrator] Query failed [%s]: %s%n", label, e.getMessage());
+        List<Map<String, Object>> rows = scaleQueryExecutor.execute(sql, label, ctx);
+        if (rows != null && !rows.isEmpty()) {
+            out.add(new CollectedData(label, sql, rows));
         }
     }
 
@@ -664,6 +935,7 @@ public class AgentOrchestrator {
             e.setReasons(toJson(card.getReasons()));
             e.setStrategies(toJson(card.getStrategies()));
             e.setSourceColumns(toJson(card.getSourceColumns()));
+            e.setChartSpec(toJson(card.getChart()));
             e.setRawEvidence(evidenceDigest);
             e.setStatus("AWAITING_CONFIRMATION");
             e.setGeneratedAt(now);
@@ -701,6 +973,20 @@ public class AgentOrchestrator {
             return objectMapper.writeValueAsString(digest);
         } catch (Exception e) {
             return "[]";
+        }
+    }
+
+    private void attachCharts(List<AgentDashboardResult.InsightCard> insights,
+                              List<CollectedData> collected) {
+        for (AgentDashboardResult.InsightCard card : insights) {
+            try {
+                if (card.getChart() != null) continue;
+                var chart = insightChartMapper.chartFor(card, collected);
+                if (chart != null) card.setChart(chart);
+            } catch (Exception e) {
+                System.out.printf("[Charts] Failed to map chart for '%s': %s%n",
+                        card.getTitle(), e.getMessage());
+            }
         }
     }
 
@@ -780,6 +1066,26 @@ public class AgentOrchestrator {
     }
 
     /**
+     * Charts for the sidebar panel beside the Agent Feed — one entry per insight that has a chart.
+     */
+    public ChartPanelResponse getChartPanel(String clientId) {
+        List<InsightCardEntity> cards = getActiveInsights(clientId);
+        List<ChartPanelItem> panel = new ArrayList<>();
+        for (InsightCardEntity card : cards) {
+            ChartSpec spec = parseChartSpec(card.getChartSpec());
+            if (spec == null) continue;
+            panel.add(new ChartPanelItem(
+                    card.getId(),
+                    card.getTitle(),
+                    card.getDescription(),
+                    card.getBadge(),
+                    card.getAgentName(),
+                    spec));
+        }
+        return new ChartPanelResponse(panel, cards.size(), panel.size());
+    }
+
+    /**
      * Returns all non-expired insight cards for a tenant (used by the feed endpoint).
      * Auto-expires stale cards before returning.
      */
@@ -795,12 +1101,21 @@ public class AgentOrchestrator {
      * Returns true if the update was applied.
      */
     public boolean updateInsightStatus(java.util.UUID cardId, String clientId, String status) {
+        return updateInsightStatus(cardId, clientId, status, null);
+    }
+
+    public boolean updateInsightStatus(java.util.UUID cardId, String clientId,
+                                        String status, String dismissReason) {
         if (!List.of("DECLINED", "COMPLETED").contains(status)) return false;
         int updated = insightCardRepository.updateStatus(cardId, clientId, status, LocalDateTime.now());
         if (updated > 0) {
-            // Record in decision memory so future confidence scoring can learn from this
-            insightCardRepository.findById(cardId).ifPresent(
-                    card -> decisionMemoryService.record(card, status));
+            insightCardRepository.findById(cardId).ifPresent(card -> {
+                decisionMemoryService.record(card, status);
+                if ("DECLINED".equals(status) && dismissReason != null && !dismissReason.isBlank()) {
+                    System.out.printf("[DecisionMemory] Dismiss reason for %s: %s%n",
+                            cardId, dismissReason);
+                }
+            });
         }
         return updated > 0;
     }
@@ -811,6 +1126,16 @@ public class AgentOrchestrator {
             return objectMapper.writeValueAsString(value);
         } catch (JsonProcessingException e) {
             return "[]";
+        }
+    }
+
+    private ChartSpec parseChartSpec(String json) {
+        if (json == null || json.isBlank() || "null".equalsIgnoreCase(json.trim())) return null;
+        try {
+            return objectMapper.readValue(json, ChartSpec.class);
+        } catch (Exception e) {
+            System.out.printf("[Charts] Failed to parse chart_spec: %s%n", e.getMessage());
+            return null;
         }
     }
 
@@ -880,5 +1205,28 @@ public class AgentOrchestrator {
         return String.format("%.1f", v);
     }
 
+    /** Up to 3 cards for the Leadership Brief — root cause first, skip forecasts. */
+    private List<AgentDashboardResult.InsightCard> leadershipBriefSources(
+            List<AgentDashboardResult.InsightCard> insights) {
+        if (insights == null || insights.isEmpty()) return List.of();
+        List<AgentDashboardResult.InsightCard> picked = new ArrayList<>();
+        for (AgentDashboardResult.InsightCard card : insights) {
+            if (picked.size() >= 3) break;
+            if (card == null) continue;
+            String agent = card.getAgentName() == null ? "" : card.getAgentName().toLowerCase();
+            if (agent.contains("forecast")) continue;
+            picked.add(card);
+        }
+        return picked;
+    }
+
     private boolean notBlank(String s) { return s != null && !s.isBlank(); }
+
+    private long maxRowCountInCatalogue(JsonNode catalogueNode) {
+        long max = 0;
+        for (JsonNode t : catalogueNode.path("tables")) {
+            max = Math.max(max, t.path("rowCount").asLong(0));
+        }
+        return max;
+    }
 }

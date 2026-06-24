@@ -1,5 +1,6 @@
 package com.example.BACKEND.catalogue.agent;
 
+import com.example.BACKEND.catalogue.agent.scale.AgentSqlHelper;
 import com.example.BACKEND.catalogue.llm.OpenAiClient;
 import com.example.BACKEND.catalogue.service.CatalogueApprovalService;
 import com.example.BACKEND.tenant.BigQueryConnectorService;
@@ -334,11 +335,7 @@ public class AgentAnalysisService {
         boolean isBQ = "bigquery".equalsIgnoreCase(provider);
         boolean isSF = "snowflake".equalsIgnoreCase(provider);
         String dateRef = isBQ ? "`" + dateCol + "`" : dateCol;
-
-        String truncExpr;
-        if (isBQ) truncExpr = "DATE_TRUNC(" + dateRef + ", MONTH)";
-        else if (isSF) truncExpr = "DATE_TRUNC('MONTH', " + dateRef + ")";
-        else truncExpr = "DATE_TRUNC('month', " + dateRef + "::date)";
+        String truncExpr = AgentSqlHelper.dateTruncMonth(dateRef, provider);
 
         return String.format(
                 "SELECT %s AS month, COUNT(*) AS records FROM %s WHERE %s IS NOT NULL GROUP BY 1 ORDER BY 1 DESC LIMIT %d",
@@ -362,19 +359,13 @@ public class AgentAnalysisService {
      * PostgreSQL: DATE_TRUNC('week', col)
      */
     private String buildDateTruncExpr(String dateRef, String compPeriod, String provider) {
-        boolean isBQ = "bigquery".equals(provider);
-        boolean isSF = "snowflake".equals(provider);
-
         String unit = switch (compPeriod) {
             case "WoW" -> "WEEK";
             case "MoM" -> "MONTH";
             case "YoY" -> "YEAR";
             default    -> "MONTH";
         };
-
-        if (isBQ) return "DATE_TRUNC(" + dateRef + ", " + unit + ")";
-        if (isSF) return "DATE_TRUNC('" + unit + "', " + dateRef + ")";
-        return "DATE_TRUNC('" + unit.toLowerCase() + "', " + dateRef + ")";
+        return AgentSqlHelper.dateTrunc(dateRef, unit, provider);
     }
 
     /**
@@ -396,10 +387,11 @@ public class AgentAnalysisService {
         };
 
         String startStr = maxDate.minusMonths(lookbackMonths).toString(); // YYYY-MM-DD
+        String dateExpr = AgentSqlHelper.asDateExpr(dateRef, provider);
 
-        if (isBQ) return " WHERE " + dateRef + " >= DATE '" + startStr + "'";
-        if (isSF) return " WHERE " + dateRef + " >= '" + startStr + "'::DATE";
-        return " WHERE " + dateRef + " >= '" + startStr + "'";
+        if (isBQ) return " WHERE " + dateExpr + " >= DATE '" + startStr + "'";
+        if (isSF) return " WHERE " + dateExpr + " >= '" + startStr + "'::DATE";
+        return " WHERE " + dateExpr + " >= '" + startStr + "'";
     }
 
     private LocalDate parseDate(String s) {

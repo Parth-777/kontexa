@@ -4,8 +4,8 @@ import com.example.BACKEND.catalogue.agent.AgentDashboardResult;
 import com.example.BACKEND.catalogue.agent.CollectedData;
 import com.example.BACKEND.catalogue.agent.EnrichedColInfo;
 import com.example.BACKEND.catalogue.agent.TableContext;
-import com.example.BACKEND.tenant.BigQueryConnectorService;
-import com.example.BACKEND.tenant.SnowflakeConnectorService;
+import com.example.BACKEND.catalogue.agent.scale.AgentSqlHelper;
+import com.example.BACKEND.catalogue.agent.scale.ScaleAwareQueryExecutor;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -29,16 +29,12 @@ import java.util.Map;
 @Service
 public class KpiPerformanceAgent {
 
-    private static final int KPI_SAMPLE  = 30;
-    private static final int MAX_METRICS = 4;
+    private static final int KPI_SAMPLE = 30;
 
-    private final BigQueryConnectorService  bigQueryConnectorService;
-    private final SnowflakeConnectorService snowflakeConnectorService;
+    private final ScaleAwareQueryExecutor queryExecutor;
 
-    public KpiPerformanceAgent(BigQueryConnectorService  bigQueryConnectorService,
-                               SnowflakeConnectorService snowflakeConnectorService) {
-        this.bigQueryConnectorService  = bigQueryConnectorService;
-        this.snowflakeConnectorService = snowflakeConnectorService;
+    public KpiPerformanceAgent(ScaleAwareQueryExecutor queryExecutor) {
+        this.queryExecutor = queryExecutor;
     }
 
     /**
@@ -49,7 +45,7 @@ public class KpiPerformanceAgent {
         List<CollectedData>               collected = new ArrayList<>();
         List<AgentDashboardResult.KpiCard> cards    = new ArrayList<>();
 
-        List<String> metrics = limit(ctx.hints().numericCols(), MAX_METRICS);
+        List<String> metrics = ctx.hints().numericCols();
         String       dateCol = ctx.hints().dateCol();
 
         for (String metric : metrics) {
@@ -58,8 +54,7 @@ public class KpiPerformanceAgent {
                     ? ctx.enriched().get(dateCol.toLowerCase()) : null;
 
             // Fetch ordered time-series data to split into current vs prior
-            String sql = buildKpiSql(ctx.tableRef(), metric, dateCol, ctx.provider(),
-                    metricInfo, dateInfo);
+            String sql = buildKpiSql(ctx, metric, dateCol, metricInfo, dateInfo);
             List<Map<String, Object>> rows = safeExecute(sql, ctx);
             if (rows == null || rows.isEmpty()) continue;
 
@@ -134,51 +129,53 @@ public class KpiPerformanceAgent {
 
     // ── SQL builder ───────────────────────────────────────────────────────────
 
-    private String buildKpiSql(String tableRef, String metric, String dateCol,
-                                String provider, EnrichedColInfo metricInfo,
-                                EnrichedColInfo dateInfo) {
-        boolean isBQ      = "bigquery".equalsIgnoreCase(provider);
-        String  metricRef = isBQ ? "`" + metric + "`" : metric;
+    private String buildKpiSql(TableContext ctx, String metric, String dateCol,
+                                EnrichedColInfo metricInfo, EnrichedColInfo dateInfo) {
+        String provider  = ctx.provider();
+        String tableRef  = ctx.tableRef();
+        String metricRef = AgentSqlHelper.qualify(metric, provider);
 
         if (dateCol == null) {
             return String.format("SELECT %s FROM %s ORDER BY %s DESC LIMIT %d",
-                    metricRef, tableRef, metricRef, KPI_SAMPLE);
+                    metricRef, AgentSqlHelper.qualifiedTableRef(ctx), metricRef, KPI_SAMPLE);
         }
 
-        String dateRef    = isBQ ? "`" + dateCol + "`" : dateCol;
+        String dateRef    = AgentSqlHelper.qualify(dateCol, provider);
         String aggMethod  = metricInfo != null ? metricInfo.aggregationMethod() : "NONE";
         String compPeriod = metricInfo != null ? metricInfo.comparisonPeriod()  : "NONE";
         String dataMax    = dateInfo   != null ? dateInfo.maxValue()            : "";
+        String window     = resolveWindow(ctx, dateRef, dataMax, compPeriod, provider);
 
         if (List.of("SUM", "COUNT", "AVG").contains(aggMethod)
                 && List.of("WoW", "MoM", "YoY").contains(compPeriod)) {
 
             String groupExpr = dateTrunc(dateRef, compPeriod, provider);
             String aggExpr   = aggExpr(metricRef, aggMethod);
-            String lookback  = lookbackFilter(dateRef, dataMax, compPeriod, provider);
 
             return String.format(
-                    "SELECT %s AS period, %s AS metric_value FROM %s%s " +
+                    "SELECT %s AS period, %s AS metric_value FROM %s " +
                     "GROUP BY period ORDER BY period DESC LIMIT %d",
-                    groupExpr, aggExpr, tableRef, lookback, KPI_SAMPLE);
+                    groupExpr, aggExpr, AgentSqlHelper.qualifiedTableRef(ctx) + window, KPI_SAMPLE);
         }
 
-        // Fallback: recent raw values ordered by date
         return String.format("SELECT %s, %s FROM %s ORDER BY %s DESC LIMIT %d",
-                dateRef, metricRef, tableRef, dateRef, KPI_SAMPLE);
+                dateRef, metricRef, AgentSqlHelper.qualifiedTableRef(ctx) + window, dateRef, KPI_SAMPLE);
+    }
+
+    private String resolveWindow(TableContext ctx, String dateRef, String dataMax,
+                                String period, String provider) {
+        String scaleWindow = AgentSqlHelper.windowClause(ctx);
+        if (!scaleWindow.isEmpty()) return scaleWindow;
+        return lookbackFilter(dateRef, dataMax, period, provider);
     }
 
     private String dateTrunc(String dateRef, String period, String provider) {
-        boolean isBQ = "bigquery".equalsIgnoreCase(provider);
-        boolean isSF = "snowflake".equalsIgnoreCase(provider);
         String unit = switch (period) {
             case "WoW" -> "WEEK";
             case "YoY" -> "YEAR";
             default    -> "MONTH";
         };
-        if (isBQ) return "DATE_TRUNC(" + dateRef + ", " + unit + ")";
-        if (isSF) return "DATE_TRUNC('" + unit + "', " + dateRef + ")";
-        return "DATE_TRUNC('" + unit.toLowerCase() + "', " + dateRef + ")";
+        return AgentSqlHelper.dateTrunc(dateRef, unit, provider);
     }
 
     private String aggExpr(String col, String method) {
@@ -191,7 +188,14 @@ public class KpiPerformanceAgent {
 
     private String lookbackFilter(String dateRef, String dataMax,
                                    String period, String provider) {
-        if (dataMax == null || dataMax.isBlank() || dataMax.length() < 10) return "";
+        String dateExpr = AgentSqlHelper.asDateExpr(dateRef, provider);
+        if (dataMax == null || dataMax.isBlank() || dataMax.length() < 10) {
+            LocalDate start = LocalDate.now().minusMonths(24);
+            if ("bigquery".equalsIgnoreCase(provider)) {
+                return " WHERE " + dateExpr + " >= DATE '" + start + "'";
+            }
+            return " WHERE " + dateExpr + " >= '" + start + "'";
+        }
         try {
             LocalDate maxDate = LocalDate.parse(dataMax.substring(0, 10));
             int months = switch (period) {
@@ -202,9 +206,9 @@ public class KpiPerformanceAgent {
             String start = maxDate.minusMonths(months).toString();
             boolean isBQ = "bigquery".equalsIgnoreCase(provider);
             boolean isSF = "snowflake".equalsIgnoreCase(provider);
-            if (isBQ) return " WHERE " + dateRef + " >= DATE '" + start + "'";
-            if (isSF) return " WHERE " + dateRef + " >= '" + start + "'::DATE";
-            return " WHERE " + dateRef + " >= '" + start + "'";
+            if (isBQ) return " WHERE " + dateExpr + " >= DATE '" + start + "'";
+            if (isSF) return " WHERE " + dateExpr + " >= '" + start + "'::DATE";
+            return " WHERE " + dateExpr + " >= '" + start + "'";
         } catch (DateTimeParseException e) {
             return "";
         }
@@ -213,30 +217,6 @@ public class KpiPerformanceAgent {
     // ── Query execution ───────────────────────────────────────────────────────
 
     private List<Map<String, Object>> safeExecute(String sql, TableContext ctx) {
-        try {
-            return execute(sql, ctx);
-        } catch (Exception e) {
-            System.out.printf("[KpiAgent] Query failed: %s%n", e.getMessage());
-            return List.of();
-        }
-    }
-
-    private List<Map<String, Object>> execute(String sql, TableContext ctx) {
-        if (ctx.useBQ() && ctx.bqCfg().isPresent()) {
-            var c = ctx.bqCfg().get();
-            return bigQueryConnectorService.executeSelect(
-                    c.projectId(), c.serviceAccountJson(), c.location(), c.dataset(), sql);
-        } else if (ctx.useSF() && ctx.sfCfg().isPresent()) {
-            var c = ctx.sfCfg().get();
-            return snowflakeConnectorService.executeSelect(
-                    c.account(), c.warehouse(), c.database(),
-                    c.schema(), c.username(), c.password(), sql);
-        } else {
-            return ctx.jdbcTemplate().queryForList(sql);
-        }
-    }
-
-    private <T> List<T> limit(List<T> list, int max) {
-        return list.size() <= max ? list : list.subList(0, max);
+        return queryExecutor.execute(sql, "KPI", ctx);
     }
 }

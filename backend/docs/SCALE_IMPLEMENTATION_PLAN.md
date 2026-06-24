@@ -216,7 +216,7 @@ Max **3 queries** replacing 1× `SELECT *` + redundant scans.
 | 4.3 | Job: on approval + nightly `@Scheduled` | **New** `MetricRollupScheduler.java`, hook `CatalogueApprovalService` | FR-ROLLUP-03 |
 | 4.4 | `RollupDataSource` adapter agents call instead of raw table ref | Trend/KPI/Distribution agents | FR-ROLLUP-02 |
 | 4.5 | Freshness: if rollup age &gt; 36h, fallback to Phase 2 SQL | Policy in orchestrator | FR-ROLLUP-02 |
-| 4.6 | Documentation + ops runbook | `docs/SCALE_ROLLUP_OPS.md` | — |
+| 4.6 | Documentation + ops runbook | `docs/SCALE_ROLLUP_HOW_IT_WORKS.md` (done), optional `SCALE_ROLLUP_OPS.md` | — |
 
 ### 5.2 Rollup schema (draft)
 

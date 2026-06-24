@@ -1,5 +1,7 @@
 package com.example.BACKEND.catalogue.query;
 
+import com.example.BACKEND.catalogue.agent.scale.ChatSqlScaleGuard;
+import com.example.BACKEND.catalogue.agent.scale.QueryRejectedException;
 import com.example.BACKEND.catalogue.llm.OpenAiClient;
 import com.example.BACKEND.catalogue.service.CatalogueApprovalService;
 import com.example.BACKEND.tenant.BigQueryConnectorService;
@@ -37,6 +39,7 @@ public class CatalogueQueryService {
     private final TenantCloudConnectionService cloudConnectionService;
     private final BigQueryConnectorService bigQueryConnectorService;
     private final SnowflakeConnectorService snowflakeConnectorService;
+    private final ChatSqlScaleGuard chatSqlScaleGuard;
 
     public CatalogueQueryService(
             CatalogueApprovalService approvalService,
@@ -47,7 +50,8 @@ public class CatalogueQueryService {
             ObjectMapper objectMapper,
             TenantCloudConnectionService cloudConnectionService,
             BigQueryConnectorService bigQueryConnectorService,
-            SnowflakeConnectorService snowflakeConnectorService
+            SnowflakeConnectorService snowflakeConnectorService,
+            ChatSqlScaleGuard chatSqlScaleGuard
     ) {
         this.approvalService = approvalService;
         this.retrieverService = retrieverService;
@@ -58,6 +62,7 @@ public class CatalogueQueryService {
         this.cloudConnectionService = cloudConnectionService;
         this.bigQueryConnectorService = bigQueryConnectorService;
         this.snowflakeConnectorService = snowflakeConnectorService;
+        this.chatSqlScaleGuard = chatSqlScaleGuard;
     }
 
     public QueryResult ask(String clientId, String question) {
@@ -103,6 +108,8 @@ public class CatalogueQueryService {
         sql = fixIntegerColumnILike(sql, fullNode);
         sql = fixSemanticColumnMapping(sql, question, fullNode);
         if (useBigQuery) sql = normalizeForBigQuery(sql);
+
+        sql = guardChatSql(sql, fullNode);
 
         List<Map<String, Object>> rows;
         if (useBigQuery) {
@@ -154,9 +161,7 @@ public class CatalogueQueryService {
         sql = fixSemanticColumnMapping(sql, questionContext, fullNode);
         if (useBigQuery) sql = normalizeForBigQuery(sql);
 
-        if (!sql.toLowerCase().contains(" limit ")) {
-            sql = sql.replaceAll(";\\s*$", "") + " LIMIT 1000";
-        }
+        sql = guardChatSql(sql, fullNode);
 
         List<Map<String, Object>> rows;
         if (useBigQuery)       rows = executeBigQuery(sql, bigQueryCfg.get());
@@ -247,6 +252,14 @@ public class CatalogueQueryService {
                 cfg.account(), cfg.warehouse(), cfg.database(),
                 cfg.schema(), cfg.username(), cfg.password(), sql
         );
+    }
+
+    private String guardChatSql(String sql, JsonNode catalogueNode) {
+        try {
+            return chatSqlScaleGuard.prepare(sql, catalogueNode);
+        } catch (QueryRejectedException e) {
+            throw new IllegalArgumentException(e.getMessage(), e);
+        }
     }
 
     private boolean notBlank(String value) {

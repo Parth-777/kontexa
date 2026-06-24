@@ -1,6 +1,8 @@
 package com.example.BACKEND.catalogue.service;
 
 import com.example.BACKEND.catalogue.agent.StarSchemaDetector;
+import com.example.BACKEND.catalogue.agent.scale.MetricRollupService;
+import com.example.BACKEND.catalogue.agent.scale.ScaleProperties;
 import com.example.BACKEND.catalogue.entity.CatalogueColumnEntity;
 import com.example.BACKEND.catalogue.entity.CatalogueSnapshotEntity;
 import com.example.BACKEND.catalogue.entity.CatalogueTableEntity;
@@ -10,6 +12,7 @@ import com.example.BACKEND.catalogue.repository.ClientCatalogueRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -39,17 +42,26 @@ public class CatalogueApprovalService {
     private final ObjectMapper objectMapper;
     private final CatalogueSemanticEnricher semanticEnricher;
     private final StarSchemaDetector starSchemaDetector;
+    private final MetricRollupService metricRollupService;
+    private final ScaleProperties scaleProperties;
+    private final TenantBusinessProfileService tenantBusinessProfileService;
 
     public CatalogueApprovalService(ClientCatalogueRepository catalogueRepo,
                                     CatalogueSnapshotRepository snapshotRepo,
                                     ObjectMapper objectMapper,
                                     CatalogueSemanticEnricher semanticEnricher,
-                                    StarSchemaDetector starSchemaDetector) {
+                                    StarSchemaDetector starSchemaDetector,
+                                    @Lazy MetricRollupService metricRollupService,
+                                    ScaleProperties scaleProperties,
+                                    TenantBusinessProfileService tenantBusinessProfileService) {
         this.catalogueRepo      = catalogueRepo;
         this.snapshotRepo       = snapshotRepo;
         this.objectMapper       = objectMapper;
         this.semanticEnricher   = semanticEnricher;
         this.starSchemaDetector = starSchemaDetector;
+        this.metricRollupService = metricRollupService;
+        this.scaleProperties    = scaleProperties;
+        this.tenantBusinessProfileService = tenantBusinessProfileService;
     }
 
     /**
@@ -95,6 +107,21 @@ public class CatalogueApprovalService {
         snapshotRepo.save(snapshot);
 
         System.out.println("[Approval] Snapshot written for client: " + catalogue.getClientId());
+
+        try {
+            tenantBusinessProfileService.inferFromCatalogue(catalogue);
+        } catch (Exception e) {
+            System.out.println("[Approval] Business profile inference failed (non-fatal): " + e.getMessage());
+        }
+
+        if (scaleProperties.isRollupEnabled()) {
+            try {
+                metricRollupService.buildRollupsForClient(catalogue.getClientId());
+            } catch (Exception e) {
+                System.out.println("[Approval] Rollup build failed (non-fatal): " + e.getMessage());
+            }
+        }
+
         return catalogue;
     }
 

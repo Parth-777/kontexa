@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "eternal-skyline-497405-u2",
+  "private_key_id": "6e1d69a3c8fc47baa630a8fbc99e787b2e04adcb",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC3wS4JiVwtpSzl\nxZDheWZpXkqec7weaD6mLFm517FyGILOOaWPIhMEcn3+iYSsIAoS5YgRRRFZpeVI\nW90E1TbKVP6n+rDjmYTljZzks1uThTy+KI3XC7a2tP/DKpYyZcgWkceYaSfrnlMJ\nG7tWLwI3qgDwCph8bPQ3Wzb9asMU6+uOrhGphUYl9tKsC3epbjuV0ZZPP/66PZfe\nQduap6UNDNjYMQOcdbpEinMuHCiDeQcw2JcEQKDBBe1qJMDiZXvu1NmXpWZKbnGY\nUiBovwBPyrXBGLWRuYaPsZvsm94bUH/78VVT/7y4SKgNnpn7/xbl/N3/Ewjxyjqs\nkOZMx22HAgMBAAECggEANkHFLS2w2Q13h1ThpaHp+lzMHaNAvZ28OebIi5ZDn9Pa\n87eTygKeqOaBi2Hhmc1QDCpYFflV2Smh3M67IQ0vw2h7VPAxwNJ4qis5U1IeTR2/\nRMrGruOXjLU++8qcVL826GsdC0Spc+nozLyygQ0aU4NQCZCnW730ElBNmWAnwAo0\ntYUms4tjHUbmo/jGuJ54AO83wnOxVCzpVwcQ3UtVOcbuFZxXh6p77YLit81exvcL\nf0AUjSvnIN9clfABfBHtjrvysYWXaUpsZSDbuSP6JGEe5P59A8hpClmiLT8E7CB/\nqSUYWka0STRPK+jO7uu4PxmoQt1EV6e2JkFQSHxl8QKBgQDpJZDdbr6t63oR6BhK\nMDcn7ucMGYYVpIsmgR/E+Ks5cUj8bs4tvFAmleAlhmSP9xbuh2Na1MoFdcKe0GWA\nEfzAhEbAhIZOQdv3wZLfXOYS9qiKPDAj33SUUpeTSUtLeThOn3XynF8E5YplgMGD\nGPytVnjikkPNUPDmipBi9aVBOQKBgQDJxDMYdyBprdVS/Y7WaAO5xFJrmgZTZabV\ne99mpueakiv6MmZF8NeK7K/G+MxfFtEcRQbaPuH1VeSNg98JntjDPTzxnmVKFNnk\nTQbdv0seXwe/Wt+7WhBjfA0MgKNfaE2rHXleQQ2MSW2zq8ffJ8RCSQSXrrlctz7T\ni2goTI3kvwKBgQDgLL3BHGX9xshmBVutofS20fCY4sXZc5BUop2QgGXq4rGB/20B\n7urGXx/aFQIGp1gGXGm9AZOKcnOCzvB5l1IHLmj1Xbfh8VN3Q0pcuO+EVmUyHbNQ\nGuD2aP/ToArk9BafCpaXg6GdjLRo6semrVTvupCbknXdKjGoCp3QeU+/iQKBgDfJ\nD3eMOGH/tiOkB4IwcBdEuKUXiPg1+tK71SDEtPR/xbj/hleAJ5g5qMASui7wWBDA\n5Qwipsb2YKLf+yLl0HjqzZbgfJDnAvekdGmLInHbRIEb1xAt7qoS+miiiIkwhYjy\nNURiKCTJiJNMw45nqFPLbIGjxYxk/fHvcXTy9ahxAoGBAMtpnD3Y/oPcrhCbQhYM\nA35X06OeStiwBUZ/kuvjntcb87jRAxdb1l0eapWyulRUqjgVOfGCuIyZaNioEq9l\nhbc/AGIYOgd7hKq686c9T+cn02YN7k02wCj3n3fYesboQsmAe+GQ8prtfqNR6ZHI\niwAYR3FHMOwjoBf+1Yy19bPV\n-----END PRIVATE KEY-----\n",
+  "client_email": "nyc-taxi@eternal-skyline-497405-u2.iam.gserviceaccount.com",
+  "client_id": "110192264174332595355",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/nyc-taxi%40eternal-skyline-497405-u2.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}

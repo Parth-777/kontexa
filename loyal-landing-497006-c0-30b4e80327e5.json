@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "loyal-landing-497006-c0",
+  "private_key_id": "30b4e80327e5c04571b126c8c8257a1b920b4abc",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDGIMLH0Sl8wnRv\nj4bwwDYrpX1WC7i1w0KQLX1vW7elTE3QCbyzj71bFdIGNr6HOnKFC0HrTskzvF8w\nt4Jyvp9ONqtLdym6AnUDqiDTDAkq+MT8xXuJw1TXUwexj6bTfU+JwdFPuym5aqy+\nxr+GTeoABxuKcHxkdJli82p3Kpp9y3XcsvhaL7bGFFj0bvHiGTzborhPlPQtStak\njUq6jB3kzMlKQozyIPdLiT/bnFg80iEHfL8pVvyw67/H277s74ISQrZtokFgqpdv\nOQK4WzFMZxztTzNqYz2w6y8Ej9EkNKLkxCqqqkb6acFGD5qtPYvmeHmpnxemi6ij\nsCipjTlHAgMBAAECggEAGBblopFDimrDk3OPrvf/3iCvSOYAnaunDTaquKkd1BhJ\n9xB9WWu8VIsmT8vE21ZM6ZuWdpDMFTaYcFOaUG9C7qnmUTT6OtE6VFQRd6JP/wyO\nOZmdTVZq8LSktn8b2T0JjbCmIsaZP8prmdU6djmaSPSURv8pm2EzQSe4JdMP7llh\nSOFOHsnVmctIuJyLOM5oJhfYJyMOtmSvWwrLKp9Wazne4+/mEguLXRq/Tvqju8Y0\nNoSpKQ53ZWPM23gG11JK9d34+qDfw+fm2I7IroW08ejxag+RqWk6OOHFS/ZwzYAf\no4rKAOXYbCJpGfpPFBWnF7NwDYY1vloovFdKSuVliQKBgQD3JluARHH+v62NsAim\nMphYDaRmD8dlK5V480MgN8qTLKY8pS8j6c+s12jEyb85WqTwG0olfnzxubUR/Vh2\n2c1u+At9dKnPjYK4VUX0Am1IOHP6fGsrUluDL5uaahZnljtqktGe32YtpOHGvH8N\nKgzb+TOhOpybVOgQ8ZMiKZT3owKBgQDNOQQcGhGqVFBJ10QK8CUC8f9c5Qa3urzL\noTipJ0YWJ5GrGMtAnknxJsAYv33JgiEGqbWM25RHu8WjB9Cv9ntpReZtey0I7Qzc\nSqJNsQXXRTcKfBUOTkZuXvTY/UNW0MzmxUqqAOxZcG1ON1aKPohIF1am3NVWnZy5\nqNaoQRMiDQKBgAYC3tLd10/05Ym+sFcqf94UZt08oQLq7nXEpOtRsBGoUlrDQcRD\n2ZNAogG3TnlcpQpZ/5Gt4+gVNjw7xz0MyxxZ2B2zCrZLoNRO7qaisHnDNb7v68Nf\n+23TaJt23Rij5MoQzBxrHpcZnYwx5X0yeqGXDBRt0oVMqWBQH94C2Oa1AoGBAMqW\n1m/HbFjxErFSSGFj36Wgr65MiO0m8ukyJnUVyCJmvW5h84O+vs/IqSnFH6+lPmUN\nc6OxwBdwThI6zNBoSjwKPQcm6bY+DMwLAV4guttgAI3hIAgXTX/3TU5H9gnl5eCK\nMsLQVoGUctMb3dprEK3aHDhtGE2BGg5NllpSo0ihAoGBAJBUcIMK47jSIkBn5Ql1\n87sQHtcfAhuT/NJ2IfCK7ejNOqbDTXbgzqZYouMpNafzTInalME0WpUrpWWfsvCL\nrV6la0EFaOfp2QE1x0XWEhMF/apyRim+2LfBxtiQG4kSr1WETNZIuFgAqraPlhMt\nk6LCNW2MAcABgqoLgZkQFPpD\n-----END PRIVATE KEY-----\n",
+  "client_email": "oil-494@loyal-landing-497006-c0.iam.gserviceaccount.com",
+  "client_id": "116494031420706655825",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/oil-494%40loyal-landing-497006-c0.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}

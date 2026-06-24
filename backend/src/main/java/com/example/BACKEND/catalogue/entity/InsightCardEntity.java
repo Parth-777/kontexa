@@ -78,6 +78,10 @@ public class InsightCardEntity {
     @Column(name = "raw_evidence", columnDefinition = "TEXT")
     private String rawEvidence;
 
+    /** Serialised chart spec JSON for the insight card (rendered by frontend). */
+    @Column(name = "chart_spec", columnDefinition = "TEXT")
+    private String chartSpec;
+
     /**
      * AWAITING_CONFIRMATION | DECLINED | COMPLETED | EXPIRED
      */
@@ -133,6 +137,9 @@ public class InsightCardEntity {
 
     public String getRawEvidence()             { return rawEvidence; }
     public void setRawEvidence(String v)       { this.rawEvidence = v; }
+
+    public String getChartSpec()               { return chartSpec; }
+    public void setChartSpec(String v)         { this.chartSpec = v; }
 
     public String getStatus()                  { return status; }
     public void setStatus(String v)            { this.status = v; }

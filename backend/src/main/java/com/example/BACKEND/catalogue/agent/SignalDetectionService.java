@@ -1,9 +1,12 @@
 package com.example.BACKEND.catalogue.agent;
 
+import com.example.BACKEND.catalogue.agent.scale.AgentSqlHelper;
+import com.example.BACKEND.catalogue.agent.TableContext;
+import com.example.BACKEND.catalogue.agent.scale.AnalysisRunContext;
+import com.example.BACKEND.catalogue.agent.scale.ScaleAwareQueryExecutor;
+import com.example.BACKEND.catalogue.agent.scale.TableContextFactory;
 import com.example.BACKEND.catalogue.entity.SignalEntity;
 import com.example.BACKEND.catalogue.repository.SignalRepository;
-import com.example.BACKEND.tenant.BigQueryConnectorService;
-import com.example.BACKEND.tenant.SnowflakeConnectorService;
 import com.example.BACKEND.tenant.TenantCloudConnectionService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -50,8 +53,8 @@ public class SignalDetectionService {
     private final SignalRepository              signalRepo;
     private final KpiDetectorService            kpiDetector;
     private final TenantCloudConnectionService  cloudConnectionService;
-    private final BigQueryConnectorService      bigQueryConnectorService;
-    private final SnowflakeConnectorService     snowflakeConnectorService;
+    private final TableContextFactory           tableContextFactory;
+    private final ScaleAwareQueryExecutor       queryExecutor;
     private final JdbcTemplate                 jdbcTemplate;
     private final ObjectMapper                 objectMapper;
 
@@ -59,16 +62,16 @@ public class SignalDetectionService {
             SignalRepository             signalRepo,
             KpiDetectorService           kpiDetector,
             TenantCloudConnectionService cloudConnectionService,
-            BigQueryConnectorService     bigQueryConnectorService,
-            SnowflakeConnectorService    snowflakeConnectorService,
+            TableContextFactory          tableContextFactory,
+            ScaleAwareQueryExecutor      queryExecutor,
             JdbcTemplate                jdbcTemplate,
             ObjectMapper                objectMapper
     ) {
         this.signalRepo               = signalRepo;
         this.kpiDetector              = kpiDetector;
         this.cloudConnectionService   = cloudConnectionService;
-        this.bigQueryConnectorService = bigQueryConnectorService;
-        this.snowflakeConnectorService = snowflakeConnectorService;
+        this.tableContextFactory      = tableContextFactory;
+        this.queryExecutor            = queryExecutor;
         this.jdbcTemplate             = jdbcTemplate;
         this.objectMapper             = objectMapper;
     }
@@ -98,34 +101,29 @@ public class SignalDetectionService {
         boolean useBQ = bqCfg.isPresent() && notBlank(bqCfg.get().projectId());
         boolean useSF = sfCfg.isPresent() && notBlank(sfCfg.get().account());
 
-        final Optional<TenantCloudConnectionService.BigQueryConfig>  bqF = bqCfg;
-        final Optional<TenantCloudConnectionService.SnowflakeConfig> sfF = sfCfg;
+        AnalysisRunContext signalBudget = AnalysisRunContext.unlimited();
 
         for (JsonNode tableNode : catalogueNode.path("tables")) {
             KpiDetectorService.ColumnHints hints = kpiDetector.classifyColumns(tableNode);
             if (hints.tableName().isBlank()) continue;
 
-            String tableRef = tableRef(hints, provider);
-
             try {
-                // Check 1: metric columns
-                for (String col : hints.numericCols()) {
-                    SignalEntity sig = checkMetricShift(
-                            clientId, hints, col, tableRef, provider, useBQ, useSF, bqF, sfF);
+                TableContext ctx = tableContextFactory.forTableNode(
+                        clientId, tableNode, provider, useBQ, useSF, bqCfg, sfCfg,
+                        jdbcTemplate, signalBudget);
+
+                for (String col : ctx.hints().numericCols()) {
+                    SignalEntity sig = checkMetricShift(clientId, ctx, col);
                     if (sig != null) triggered.add(sig);
                 }
 
-                // Check 2: dimension/categorical columns (max 3 per table)
-                for (String col : limit(hints.stringCols(), 3)) {
-                    SignalEntity sig = checkDistributionChange(
-                            clientId, hints, col, tableRef, provider, useBQ, useSF, bqF, sfF);
+                for (String col : limit(ctx.hints().stringCols(), 3)) {
+                    SignalEntity sig = checkDistributionChange(clientId, ctx, col);
                     if (sig != null) triggered.add(sig);
                 }
 
-                // Check 3: time trend (if date column present)
-                if (hints.dateCol() != null) {
-                    SignalEntity sig = checkTimeTrend(
-                            clientId, hints, tableRef, provider, useBQ, useSF, bqF, sfF);
+                if (ctx.hints().dateCol() != null) {
+                    SignalEntity sig = checkTimeTrend(clientId, ctx);
                     if (sig != null) triggered.add(sig);
                 }
 
@@ -141,19 +139,15 @@ public class SignalDetectionService {
     // ── Signal checks ─────────────────────────────────────────────────────────
 
     /** Has the average of a numeric column shifted significantly from its baseline? */
-    private SignalEntity checkMetricShift(
-            String clientId, KpiDetectorService.ColumnHints hints,
-            String column, String tableRef, String provider,
-            boolean useBQ, boolean useSF,
-            Optional<TenantCloudConnectionService.BigQueryConfig>  bqCfg,
-            Optional<TenantCloudConnectionService.SnowflakeConfig> sfCfg
-    ) {
+    private SignalEntity checkMetricShift(String clientId, TableContext ctx, String column) {
+        KpiDetectorService.ColumnHints hints = ctx.hints();
         if (isDuplicate(clientId, hints.tableName(), "METRIC_SHIFT", column)) return null;
 
-        String colRef = q(column, provider);
-        String sql    = String.format("SELECT AVG(%s) AS val FROM %s", colRef, tableRef);
+        String colRef = AgentSqlHelper.qualify(column, ctx.provider());
+        String sql    = String.format("SELECT AVG(%s) AS val FROM %s",
+                colRef, AgentSqlHelper.qualifiedTableRef(ctx) + AgentSqlHelper.windowClause(ctx));
 
-        List<Map<String, Object>> rows = query(sql, useBQ, useSF, bqCfg, sfCfg);
+        List<Map<String, Object>> rows = queryExecutor.execute(sql, "Signal metric: " + column, ctx);
         if (rows == null || rows.isEmpty()) return null;
 
         Double current = toDouble(rows.get(0).get("val"));
@@ -166,22 +160,17 @@ public class SignalDetectionService {
      * Has the top-value share of a categorical column shifted?
      * e.g. "Electronics" used to be 40% of orders — now it's 60%.
      */
-    private SignalEntity checkDistributionChange(
-            String clientId, KpiDetectorService.ColumnHints hints,
-            String column, String tableRef, String provider,
-            boolean useBQ, boolean useSF,
-            Optional<TenantCloudConnectionService.BigQueryConfig>  bqCfg,
-            Optional<TenantCloudConnectionService.SnowflakeConfig> sfCfg
-    ) {
+    private SignalEntity checkDistributionChange(String clientId, TableContext ctx, String column) {
+        KpiDetectorService.ColumnHints hints = ctx.hints();
         if (isDuplicate(clientId, hints.tableName(), "DISTRIBUTION_CHANGE", column)) return null;
 
-        String colRef = q(column, provider);
+        String colRef = AgentSqlHelper.qualify(column, ctx.provider());
         String sql    = String.format(
                 "SELECT %s AS cat, COUNT(*) AS cnt FROM %s " +
-                "WHERE %s IS NOT NULL GROUP BY %s ORDER BY cnt DESC LIMIT 10",
-                colRef, tableRef, colRef, colRef);
+                "WHERE %s IS NOT NULL%s GROUP BY %s ORDER BY cnt DESC LIMIT 10",
+                colRef, ctx.tableRef(), colRef, AgentSqlHelper.windowAndClause(ctx), colRef);
 
-        List<Map<String, Object>> rows = query(sql, useBQ, useSF, bqCfg, sfCfg);
+        List<Map<String, Object>> rows = queryExecutor.execute(sql, "Signal distribution: " + column, ctx);
         if (rows == null || rows.size() < 2) return null;
 
         double total    = rows.stream().mapToDouble(r -> toDoubleOrZero(r.get("cnt"))).sum();
@@ -192,29 +181,19 @@ public class SignalDetectionService {
     }
 
     /** Has the per-month record volume changed vs the previous period? */
-    private SignalEntity checkTimeTrend(
-            String clientId, KpiDetectorService.ColumnHints hints,
-            String tableRef, String provider,
-            boolean useBQ, boolean useSF,
-            Optional<TenantCloudConnectionService.BigQueryConfig>  bqCfg,
-            Optional<TenantCloudConnectionService.SnowflakeConfig> sfCfg
-    ) {
+    private SignalEntity checkTimeTrend(String clientId, TableContext ctx) {
+        KpiDetectorService.ColumnHints hints = ctx.hints();
         if (isDuplicate(clientId, hints.tableName(), "TIME_TREND", null)) return null;
 
-        String dateRef    = q(hints.dateCol(), provider);
-        boolean isBQ = "bigquery".equalsIgnoreCase(provider);
-        boolean isSF = "snowflake".equalsIgnoreCase(provider);
-
-        String truncExpr = isBQ ? "DATE_TRUNC(" + dateRef + ", MONTH)"
-                         : isSF ? "DATE_TRUNC('MONTH', " + dateRef + ")"
-                         : "DATE_TRUNC('month', " + dateRef + "::date)";
+        String dateRef = AgentSqlHelper.qualify(hints.dateCol(), ctx.provider());
+        String truncExpr = AgentSqlHelper.dateTruncMonth(dateRef, ctx.provider());
 
         String sql = String.format(
                 "SELECT %s AS month, COUNT(*) AS records FROM %s " +
-                "WHERE %s IS NOT NULL GROUP BY 1 ORDER BY 1 DESC LIMIT 3",
-                truncExpr, tableRef, dateRef);
+                "WHERE %s IS NOT NULL%s GROUP BY 1 ORDER BY 1 DESC LIMIT 3",
+                truncExpr, ctx.tableRef(), dateRef, AgentSqlHelper.windowAndClause(ctx));
 
-        List<Map<String, Object>> rows = query(sql, useBQ, useSF, bqCfg, sfCfg);
+        List<Map<String, Object>> rows = queryExecutor.execute(sql, "Signal time trend", ctx);
         if (rows == null || rows.size() < 2) return null;
 
         double latest   = toDoubleOrZero(rows.get(0).get("records"));
@@ -305,50 +284,6 @@ public class SignalDetectionService {
         if (abs >= HIGH_THRESHOLD)   return "HIGH";
         if (abs >= MEDIUM_THRESHOLD) return "MEDIUM";
         return "NONE";
-    }
-
-    private String tableRef(KpiDetectorService.ColumnHints hints, String provider) {
-        String name   = hints.tableName();
-        String schema = hints.tableSchema();
-        return switch (provider == null ? "" : provider.toLowerCase()) {
-            case "bigquery"  -> name;
-            case "snowflake" -> {
-                String sc = schema == null || schema.isBlank() ? "PUBLIC" : schema.toUpperCase();
-                yield sc + "." + name.toUpperCase();
-            }
-            default -> {
-                String sc = schema == null || schema.isBlank() ? "public" : schema;
-                yield sc + "." + name;
-            }
-        };
-    }
-
-    private String q(String col, String provider) {
-        return "bigquery".equalsIgnoreCase(provider) ? "`" + col + "`" : col;
-    }
-
-    private List<Map<String, Object>> query(
-            String sql, boolean useBQ, boolean useSF,
-            Optional<TenantCloudConnectionService.BigQueryConfig>  bqCfg,
-            Optional<TenantCloudConnectionService.SnowflakeConfig> sfCfg
-    ) {
-        try {
-            if (useBQ && bqCfg.isPresent()) {
-                var c = bqCfg.get();
-                return bigQueryConnectorService.executeSelect(
-                        c.projectId(), c.serviceAccountJson(), c.location(), c.dataset(), sql);
-            } else if (useSF && sfCfg.isPresent()) {
-                var c = sfCfg.get();
-                return snowflakeConnectorService.executeSelect(
-                        c.account(), c.warehouse(), c.database(),
-                        c.schema(), c.username(), c.password(), sql);
-            } else {
-                return jdbcTemplate.queryForList(sql);
-            }
-        } catch (Exception e) {
-            System.out.printf("[Signal] Query failed: %s%n", e.getMessage());
-            return List.of();
-        }
     }
 
     private Double toDouble(Object val) {
