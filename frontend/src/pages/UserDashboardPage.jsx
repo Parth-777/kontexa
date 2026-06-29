@@ -612,17 +612,6 @@ function DecisionInsightMessage({ msg }) {
           </ul>
         )}
 
-        {d.answer_synthesis?.follow_up_questions?.length > 0 && (
-          <div className="di-follow-ups">
-            <p className="di-section-label">FOLLOW-UP QUESTIONS</p>
-            <ul>
-              {d.answer_synthesis.follow_up_questions.map((q, i) => (
-                <li key={i}>{q}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-
         {secondary && secondary !== primarySummary && secondary !== keyTakeawayText && (
           <p className="di-secondary">{secondary}</p>
         )}

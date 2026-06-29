@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "kontexa": {
+      "command": "node",
+      "args": ["C:\\kontexa\\kontexa-mcp\\dist\\index.js", "serve"]
+    }
+  }
+}

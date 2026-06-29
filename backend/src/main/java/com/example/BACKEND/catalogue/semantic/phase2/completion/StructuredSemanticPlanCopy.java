@@ -39,7 +39,9 @@ final class StructuredSemanticPlanCopy {
                 plan.timeGrain(),
                 plan.confidence(),
                 appendCompletionNote(plan.reasoning(), secondaryMetric),
-                plan.alternatives());
+                plan.alternatives(),
+                plan.executionMode(),
+                plan.investigationDirection());
     }
 
     private static String appendCompletionNote(String reasoning, String secondaryMetric) {

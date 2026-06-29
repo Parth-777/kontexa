@@ -19,7 +19,7 @@ import com.example.BACKEND.catalogue.decision.presentation.executive.ExecutivePr
 import com.example.BACKEND.catalogue.decision.presentation.executive.ExecutivePresentationBuilder;
 import com.example.BACKEND.catalogue.decision.presentation.executive.ExecutivePresentationStatisticsBuilder;
 import com.example.BACKEND.catalogue.decision.presentation.executive.ExecutiveConfidenceLabel;
-import com.example.BACKEND.catalogue.decision.synthesis.answer.AnswerSynthesisInputBuilder;
+ import com.example.BACKEND.catalogue.decision.synthesis.answer.AnswerSynthesisInputBuilder;
 import com.example.BACKEND.catalogue.decision.synthesis.answer.AnswerSynthesisOutput;
 import com.example.BACKEND.catalogue.decision.synthesis.answer.AnswerSynthesizer;
 import com.example.BACKEND.catalogue.semantic.phase2.GptSemanticPlanningOrchestrator;

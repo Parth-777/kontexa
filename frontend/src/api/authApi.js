@@ -14,6 +14,25 @@ export async function workspaceLogin({ workspaceId, password, deviceLabel }) {
   return payload;
 }
 
+/**
+ * MCP login handoff. Called right after a successful login when the sign-in page
+ * is in MCP mode (`/signin?mcp=1`). Exchanges the just-issued access token for a
+ * single-use loopback redirect URL that hands a code back to the local MCP.
+ */
+export async function mcpComplete({ redirectUri, state, accessToken }) {
+  const response = await fetch(`${BASE_URL}/api/auth/mcp/complete`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    },
+    body: JSON.stringify({ redirectUri, state }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || 'MCP login handoff failed');
+  return payload; // { redirectUri }
+}
+
 export async function refreshSession(refreshToken) {
   const response = await fetch(`${BASE_URL}/api/auth/refresh`, {
     method: 'POST',

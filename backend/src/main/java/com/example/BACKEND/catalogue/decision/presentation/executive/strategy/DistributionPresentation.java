@@ -32,7 +32,7 @@ public class DistributionPresentation implements PresentationStrategy {
                 ctx, displayRows, measureCol, partitionCol, measureLabel, partitionLabel,
                 measureLabel + " by " + partitionLabel, true);
 
-        ExecutivePresentation.ChartHint hint = ctx.chartHint("BAR", table.title(), partitionCol, measureCol, "currency");
+        ExecutivePresentation.ChartHint hint = ctx.chartHint("HBAR", table.title(), partitionCol, measureCol, "currency");
         List<String> insights = List.of("Distribution table with share percentages");
 
         return ExecutivePresentationFactory.create(
@@ -41,7 +41,7 @@ public class DistributionPresentation implements PresentationStrategy {
                 table,
                 List.of(hint),
                 ctx.summary(type(), rows.size(), displayRows.size(),
-                        measureLabel, partitionLabel, table.title(), "BAR", insights),
+                        measureLabel, partitionLabel, table.title(), "HBAR", insights),
                 insights,
                 List.of(),
                 List.of("Which segment has the largest share?", "How concentrated is " + measureLabel + "?"));

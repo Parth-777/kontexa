@@ -26,6 +26,7 @@ public class ExecutivePresentationBuilder {
     private final PresentationStrategyResolver resolver;
     private final PresentationBuildContext context;
     private final Map<PresentationStrategyType, PresentationStrategy> strategies;
+    private final ChartCardinalityReducer chartCardinalityReducer;
 
     public ExecutivePresentationBuilder(
             SemanticMetricFormatter formatter,
@@ -35,6 +36,8 @@ public class ExecutivePresentationBuilder {
     ) {
         this.resolver = resolver;
         this.context = new PresentationBuildContext(formatter, properties);
+        this.chartCardinalityReducer = new ChartCardinalityReducer(
+                properties != null ? properties.getChart().getTopN() : 5);
         this.strategies = new LinkedHashMap<>();
         for (PresentationStrategy strategy : strategyList) {
             strategies.put(strategy.type(), strategy);
@@ -95,22 +98,28 @@ public class ExecutivePresentationBuilder {
             return null;
         }
 
-        List<Map<String, Object>> data = new ArrayList<>();
-        for (Map<String, Object> row : warehouseRows) {
-            data.add(new LinkedHashMap<>(row));
-        }
+        // Cardinality-aware: the chart visualizes only the most important categories (Top-N + "Other"),
+        // while the warehouse rows, statistics, and executive table remain complete.
+        String categoryKey = hint.categoryKey() != null ? hint.categoryKey() : hint.xKey();
+        String valueKey = hint.valueKey() != null ? hint.valueKey() : hint.yKey();
+        ChartCardinalityReducer.Result reduced = chartCardinalityReducer.reduce(
+                presentation.type(), hint.chartType(), categoryKey, valueKey, warehouseRows);
 
-        return new ChartSpec(
+        ChartSpec spec = new ChartSpec(
                 chartType,
                 hint.title(),
-                null,
+                reduced.notice(),
                 hint.categoryKey(),
                 hint.valueKey(),
                 hint.xKey(),
                 hint.yKey(),
                 hint.valueFormat(),
                 chartType == ChartSpec.ChartType.LINE ? "date" : "category",
-                data);
+                reduced.data());
+        spec.setDisplayedRows(reduced.displayedRows());
+        spec.setTotalRows(reduced.totalRows());
+        spec.setAggregatedRows(reduced.aggregatedRows());
+        return spec;
     }
 
     public List<ExecutiveSupportingMetric> toSupportingMetrics(ExecutivePresentation presentation) {
@@ -132,6 +141,7 @@ public class ExecutivePresentationBuilder {
         }
         return switch (chartType.toUpperCase(Locale.ROOT)) {
             case "BAR" -> ChartSpec.ChartType.BAR;
+            case "HBAR" -> ChartSpec.ChartType.HBAR;
             case "LINE" -> ChartSpec.ChartType.LINE;
             case "DONUT", "PIE" -> ChartSpec.ChartType.DONUT;
             case "CORRELATION", "SCATTER" -> ChartSpec.ChartType.CORRELATION;

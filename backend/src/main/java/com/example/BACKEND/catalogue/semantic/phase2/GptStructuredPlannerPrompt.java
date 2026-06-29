@@ -202,6 +202,28 @@ public final class GptStructuredPlannerPrompt {
                 Never leave aggregations.primary null when a metric is selected.
                 
                 =========================================================
+                EXECUTION MODE
+                =========================================================
+                
+                Every plan must declare an execution_mode that reflects the user's analytical objective. Decide it from the objective, never from specific words or phrases.
+                
+                - CANONICAL: the question is answered by retrieving, aggregating, segmenting, ranking, comparing, or describing values. The answer IS the data — for example a single total, a breakdown across segments, a ranking, a contribution share, or a time series. No causal explanation is required.
+                
+                - INVESTIGATION: the question asks you to explain the CAUSE of a change or outcome in a metric. Answering correctly requires decomposing a metric's movement into the drivers that produced it. The answer is an evidence-grounded explanation of why the metric moved, not a single retrieval.
+                
+                Apply this test:
+                
+                - If the objective is descriptive or retrieval (what is the value, how is it distributed, which segment ranks highest, how much does a segment contribute) choose CANONICAL.
+                
+                - If the objective is causal or explanatory about why a metric increased, decreased, grew, declined, or changed, and which factors drove that movement, choose INVESTIGATION.
+                
+                When the objective is ambiguous, choose CANONICAL.
+                
+                When execution_mode is INVESTIGATION, set investigation_direction to the change the user is asking about: INCREASE, DECREASE, or ANY when the direction is unspecified. Otherwise set investigation_direction to null.
+                
+                execution_mode does not change how you select metrics, dimensions, filters, or aggregations. Continue to resolve the plan exactly as for any other question.
+                
+                =========================================================
                 ANALYTICAL INTENT MAPPING
                 =========================================================
                 
@@ -304,6 +326,14 @@ public final class GptStructuredPlannerPrompt {
                       "type": "object",
                       "additionalProperties": false,
                       "properties": {
+                        "execution_mode": {
+                          "type": "string",
+                          "enum": ["CANONICAL","INVESTIGATION"]
+                        },
+                        "investigation_direction": {
+                          "type": ["string","null"],
+                          "enum": ["INCREASE","DECREASE","ANY",null]
+                        },
                         "intent": {
                           "type": "string",
                           "enum": ["RANKING","CONTRIBUTION","TREND","COMPARISON","DISTRIBUTION","RELATIONSHIP","SCALAR","GROWTH","PARETO","OUTLIER","VARIANCE"]
@@ -401,7 +431,7 @@ public final class GptStructuredPlannerPrompt {
                           }
                         }
                       },
-                      "required": ["intent","metric","secondary_metric","dimensions","filters","aggregations","ordering","limit","relationship_variable","time_grain","confidence","reasoning","alternatives"]
+                      "required": ["execution_mode","investigation_direction","intent","metric","secondary_metric","dimensions","filters","aggregations","ordering","limit","relationship_variable","time_grain","confidence","reasoning","alternatives"]
                     }
                     """);
         } catch (Exception e) {

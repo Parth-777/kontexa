@@ -6,6 +6,8 @@ import com.example.BACKEND.catalogue.decision.contracts.DecisionModels.MetricDes
 import com.example.BACKEND.catalogue.decision.contracts.DecisionModels.RegistryResolutionBundle;
 import com.example.BACKEND.catalogue.decision.execution.sqltemplates.DeterministicAnalyticalQueryPlanner;
 import com.example.BACKEND.catalogue.decision.execution.sqltemplates.SqlTemplateTestHarness;
+import com.example.BACKEND.catalogue.semantic.phase2.completion.ContributionCompleter;
+import com.example.BACKEND.catalogue.semantic.phase2.completion.SemanticPlanCompleter;
 import com.example.BACKEND.catalogue.semantic.canonical.CanonicalQueryModelAdapter;
 import com.example.BACKEND.catalogue.semantic.canonical.CanonicalQueryValidator;
 import com.example.BACKEND.catalogue.semantic.canonical.CanonicalSqlRenderer;
@@ -65,6 +67,7 @@ class PlannerPipelineObjectTraceTest {
                 new CanonicalQueryModelAdapter(),
                 new CanonicalQueryValidator(planningProps),
                 new CanonicalSqlRenderer(),
+                new SemanticPlanCompleter(List.of(new ContributionCompleter())),
                 MAPPER);
 
         System.out.println("=== TRACE INPUT ===");

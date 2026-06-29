@@ -33,6 +33,14 @@ public class ChartSpec {
     /** Chart data rows (already shaped for rendering). */
     private List<Map<String, Object>> data;
 
+    /**
+     * Cardinality metadata when chart data was simplified for readability.
+     * The warehouse result set and statistics remain complete; only the visualization is reduced.
+     */
+    private int displayedRows;   // categories rendered individually
+    private int totalRows;       // total grouped categories in the warehouse result
+    private int aggregatedRows;  // categories folded into the "Other" bucket (0 when none)
+
     public ChartSpec() {}
 
     public ChartSpec(ChartType type, String title, String subtitle,
@@ -75,5 +83,12 @@ public class ChartSpec {
 
     public List<Map<String, Object>> getData() { return data; }
     public void setData(List<Map<String, Object>> data) { this.data = data; }
+
+    public int getDisplayedRows() { return displayedRows; }
+    public void setDisplayedRows(int displayedRows) { this.displayedRows = displayedRows; }
+    public int getTotalRows() { return totalRows; }
+    public void setTotalRows(int totalRows) { this.totalRows = totalRows; }
+    public int getAggregatedRows() { return aggregatedRows; }
+    public void setAggregatedRows(int aggregatedRows) { this.aggregatedRows = aggregatedRows; }
 }
 

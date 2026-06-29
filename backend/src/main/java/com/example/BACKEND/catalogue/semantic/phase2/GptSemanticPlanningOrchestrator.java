@@ -13,6 +13,7 @@ import com.example.BACKEND.catalogue.semantic.canonical.CanonicalQueryModelAdapt
 import com.example.BACKEND.catalogue.semantic.canonical.CanonicalQueryValidationResult;
 import com.example.BACKEND.catalogue.semantic.canonical.CanonicalQueryValidator;
 import com.example.BACKEND.catalogue.semantic.canonical.CanonicalSqlRenderer;
+import com.example.BACKEND.catalogue.semantic.phase2.completion.SemanticPlanCompleter;
 import com.example.BACKEND.catalogue.service.CatalogueApprovalService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -44,6 +45,7 @@ public class GptSemanticPlanningOrchestrator {
     private final CanonicalQueryModelAdapter canonicalAdapter;
     private final CanonicalQueryValidator canonicalQueryValidator;
     private final CanonicalSqlRenderer canonicalSqlRenderer;
+    private final SemanticPlanCompleter semanticPlanCompleter;
     private final ObjectMapper mapper;
 
     public GptSemanticPlanningOrchestrator(
@@ -59,6 +61,7 @@ public class GptSemanticPlanningOrchestrator {
             CanonicalQueryModelAdapter canonicalAdapter,
             CanonicalQueryValidator canonicalQueryValidator,
             CanonicalSqlRenderer canonicalSqlRenderer,
+            SemanticPlanCompleter semanticPlanCompleter,
             ObjectMapper mapper
     ) {
         this.properties = properties;
@@ -73,6 +76,7 @@ public class GptSemanticPlanningOrchestrator {
         this.canonicalAdapter = canonicalAdapter;
         this.canonicalQueryValidator = canonicalQueryValidator;
         this.canonicalSqlRenderer = canonicalSqlRenderer;
+        this.semanticPlanCompleter = semanticPlanCompleter;
         this.mapper = mapper;
     }
 
@@ -93,6 +97,12 @@ public class GptSemanticPlanningOrchestrator {
         SchemaSnapshot schema = SemanticCatalogueFactory.schemaFrom(bundle);
 
         StructuredSemanticPlan semanticPlan = gptPlanner.plan(question, catalogue, schema);
+        StructuredSemanticPlan completedPlan = semanticPlanCompleter.complete(semanticPlan, catalogue);
+        if (semanticPlanCompleter.changed(semanticPlan, completedPlan)) {
+            log.info("[planner-pipeline-trace] stage=semantic_plan_completion question={} secondary_metric={}",
+                    question, completedPlan.secondaryMetric());
+        }
+        semanticPlan = completedPlan;
         SemanticPlanValidationResult validation = validator.validate(semanticPlan, catalogue);
         log.info("[planner-pipeline-trace] stage=semantic_plan_validation question={} valid={} issues={}",
                 question, validation.valid(), validation.issues());
@@ -130,9 +140,15 @@ public class GptSemanticPlanningOrchestrator {
             log.warn("[canonical] validation failed: {}", canonicalValidation.issues());
         }
 
+        String executionMode = semanticPlan.executionMode() != null
+                ? semanticPlan.executionMode()
+                : StructuredSemanticPlan.MODE_CANONICAL;
+        log.info("[planner-pipeline-trace] stage=execution_mode question={} mode={} direction={}",
+                question, executionMode, semanticPlan.investigationDirection());
+
         return new GptPlanningOutcome(
                 semanticPlan, validation, analysisPlan, specs,
-                canonicalModel, canonicalValidation);
+                canonicalModel, canonicalValidation, executionMode);
     }
 
     /**
@@ -208,12 +224,24 @@ public class GptSemanticPlanningOrchestrator {
             AnalysisPlan analysisPlan,
             List<QuerySpec> querySpecs,
             CanonicalQueryModel canonicalQueryModel,
-            CanonicalQueryValidationResult canonicalValidation
+            CanonicalQueryValidationResult canonicalValidation,
+            String executionMode
     ) {
         public boolean canonicalExecutable() {
             return canonicalValidation != null && canonicalValidation.valid()
                     && querySpecs != null && !querySpecs.isEmpty()
                     && analysisPlan != null && analysisPlan.executable();
+        }
+
+        /**
+         * INVESTIGATION questions route to the sibling investigation runtime, but only
+         * when the canonical plan is also executable (Investigation reuses the canonical
+         * measure/table as its decomposition base). Otherwise the question falls through
+         * to the existing canonical not-executable handling — Phase-1 behavior unchanged.
+         */
+        public boolean requiresInvestigation() {
+            return StructuredSemanticPlan.MODE_INVESTIGATION.equalsIgnoreCase(executionMode)
+                    && canonicalExecutable();
         }
     }
 }

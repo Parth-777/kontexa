@@ -10,6 +10,8 @@ import com.example.BACKEND.catalogue.service.CatalogueApprovalService;
 import com.example.BACKEND.catalogue.semantic.canonical.CanonicalQueryModelAdapter;
 import com.example.BACKEND.catalogue.semantic.canonical.CanonicalQueryValidator;
 import com.example.BACKEND.catalogue.semantic.canonical.CanonicalSqlRenderer;
+import com.example.BACKEND.catalogue.semantic.phase2.completion.ContributionCompleter;
+import com.example.BACKEND.catalogue.semantic.phase2.completion.SemanticPlanCompleter;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -72,6 +74,7 @@ class GptSemanticPlanningOrchestratorTest {
                 new CanonicalQueryModelAdapter(),
                 new CanonicalQueryValidator(props),
                 new CanonicalSqlRenderer(),
+                new SemanticPlanCompleter(List.of(new ContributionCompleter())),
                 MAPPER);
 
         var outcome = orchestrator.plan("Top regions by revenue", "tenant-1", bundle);
@@ -88,6 +91,75 @@ class GptSemanticPlanningOrchestratorTest {
         assertNotNull(outcome.canonicalQueryModel());
         assertEquals("total_revenue", outcome.canonicalQueryModel().measure().column());
         assertTrue(outcome.canonicalValidation().valid());
+    }
+
+    @Test
+    void completesMissingContributionDenominatorBeforeCqm() throws Exception {
+        String catalogueJson = """
+                {
+                  "tables": [{
+                    "tableSchema": "nyc_taxi",
+                    "tableName": "nyc_taxi",
+                    "columns": [
+                      {"columnName":"total_amount","role":"metric","dataType":"FLOAT",
+                       "description":"Total trip charge including fare, tips, tolls, and surcharges",
+                       "aggregationMethod":"SUM"},
+                      {"columnName":"Airport_fee","role":"metric","dataType":"FLOAT",
+                       "description":"Airport pickup or dropoff surcharge amount","aggregationMethod":"SUM"},
+                      {"columnName":"airport_flag","role":"dimension","dataType":"BOOLEAN",
+                       "description":"Whether trip involved airport pickup or dropoff"}
+                    ]
+                  }]
+                }
+                """;
+        String mockJson = """
+                {
+                  "intent": "CONTRIBUTION",
+                  "metric": "Airport_fee",
+                  "secondary_metric": null,
+                  "dimensions": [],
+                  "filters": [],
+                  "aggregations": {"primary": "SUM", "secondary": null},
+                  "ordering": null,
+                  "limit": null,
+                  "relationship_variable": null,
+                  "time_grain": null,
+                  "confidence": 0.91,
+                  "reasoning": "airport fee contribution",
+                  "alternatives": []
+                }
+                """;
+
+        var bundle = SemanticPlanCompleterTestSupport.nycTaxiBundle();
+        GptStructuredCompletionClient mockClient = mock(GptStructuredCompletionClient.class);
+        when(mockClient.completeStructured(anyString(), anyString(), any())).thenReturn(mockJson);
+
+        CatalogueApprovalService catalogueService = mock(CatalogueApprovalService.class);
+        when(catalogueService.getApprovedSnapshot(anyString())).thenReturn(catalogueJson);
+
+        SemanticPlanningProperties props = new SemanticPlanningProperties();
+        GptStructuredSemanticPlanner planner = new GptStructuredSemanticPlanner(mockClient, MAPPER);
+        SemanticPlanValidator validator = new SemanticPlanValidator(props);
+        DeterministicAnalyticalQueryPlanner sqlPlanner = SqlTemplateTestHarness.create().planner;
+
+        GptSemanticPlanningOrchestrator orchestrator = new GptSemanticPlanningOrchestrator(
+                props, planner, validator, new SemanticPlanToAnalysisPlanAdapter(), sqlPlanner,
+                null, catalogueService,
+                new GptSemanticShadowLogger(props, MAPPER),
+                new SemanticShadowComparisonFactory(),
+                new CanonicalQueryModelAdapter(),
+                new CanonicalQueryValidator(props),
+                new CanonicalSqlRenderer(),
+                new SemanticPlanCompleter(List.of(new ContributionCompleter())),
+                MAPPER);
+
+        var outcome = orchestrator.plan("How do airport rides contribute to revenue?", "tenant-1", bundle);
+
+        assertTrue(outcome.validation().valid());
+        assertEquals("total_amount", outcome.semanticPlan().secondaryMetric());
+        assertNotNull(outcome.canonicalQueryModel().ratio());
+        assertEquals("total_amount", outcome.canonicalQueryModel().ratio().denominator().column());
+        assertTrue(outcome.canonicalExecutable());
     }
 
     @Test
@@ -136,6 +208,7 @@ class GptSemanticPlanningOrchestratorTest {
                 new CanonicalQueryModelAdapter(),
                 new CanonicalQueryValidator(props),
                 new CanonicalSqlRenderer(),
+                new SemanticPlanCompleter(List.of(new ContributionCompleter())),
                 MAPPER);
 
         AnalysisPlan legacyPlan = AnalysisPlan.blocked("q", "legacy");

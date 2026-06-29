@@ -94,7 +94,7 @@ class ExecutivePresentationBuilderTest {
         assertEquals(5, presentation.table().rows().size());
         assertEquals("1", presentation.table().rows().getFirst().get("rank"));
         assertTrue(presentation.table().rows().getFirst().get("value").contains("B"));
-        assertEquals("BAR", presentation.charts().getFirst().chartType());
+        assertEquals("HBAR", presentation.charts().getFirst().chartType());
     }
 
     @Test
@@ -119,7 +119,7 @@ class ExecutivePresentationBuilderTest {
         assertEquals(2, presentation.table().rows().size());
         assertTrue(presentation.table().columns().stream()
                 .anyMatch(c -> "share_pct".equals(c.key())));
-        assertEquals("BAR", presentation.charts().getFirst().chartType());
+        assertEquals("HBAR", presentation.charts().getFirst().chartType());
     }
 
     @Test

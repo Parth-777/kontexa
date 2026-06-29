@@ -84,6 +84,11 @@ public class GptStructuredSemanticPlanner {
             }
         }
 
+        String executionMode = normalizeMode(textOrNull(node, "execution_mode"));
+        String investigationDirection = StructuredSemanticPlan.MODE_INVESTIGATION.equals(executionMode)
+                ? textOrNull(node, "investigation_direction")
+                : null;
+
         return new StructuredSemanticPlan(
                 node.path("intent").asText("DISTRIBUTION"),
                 metric,
@@ -97,7 +102,9 @@ public class GptStructuredSemanticPlanner {
                 timeGrain,
                 node.path("confidence").asDouble(0.5),
                 node.path("reasoning").asText(""),
-                List.copyOf(alternatives));
+                List.copyOf(alternatives),
+                executionMode,
+                investigationDirection);
     }
 
     private static List<StructuredSemanticPlan.SemanticFilter> readFilters(
@@ -149,5 +156,12 @@ public class GptStructuredSemanticPlanner {
     private static String textOrNull(JsonNode node, String field) {
         JsonNode v = node.path(field);
         return v.isNull() || v.isMissingNode() ? null : v.asText();
+    }
+
+    private static String normalizeMode(String raw) {
+        if (raw != null && StructuredSemanticPlan.MODE_INVESTIGATION.equalsIgnoreCase(raw.trim())) {
+            return StructuredSemanticPlan.MODE_INVESTIGATION;
+        }
+        return StructuredSemanticPlan.MODE_CANONICAL;
     }
 }

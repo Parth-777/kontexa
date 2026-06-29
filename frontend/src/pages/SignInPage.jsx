@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { workspaceLogin } from '../api/authApi';
+import { workspaceLogin, mcpComplete } from '../api/authApi';
 import { isAdminRole, saveSession } from '../api/session';
 import './SignInPage.css';
 
@@ -45,6 +45,25 @@ function SignInPage() {
         authSource:     loginResult.authSource || '',
         loggedInAt:     new Date().toISOString(),
       });
+
+      // MCP mode: instead of navigating to a dashboard, hand the session off to
+      // the local MCP via a single-use code, then redirect to its loopback.
+      const mcpParams = new URLSearchParams(window.location.search);
+      if (mcpParams.get('mcp') === '1') {
+        const redirectUri = mcpParams.get('redirect_uri');
+        const state = mcpParams.get('state');
+        if (!redirectUri || !state) {
+          setErrorMessage('Invalid MCP login request (missing redirect_uri or state).');
+          return;
+        }
+        const handoff = await mcpComplete({
+          redirectUri,
+          state,
+          accessToken: loginResult.accessToken,
+        });
+        window.location.assign(handoff.redirectUri);
+        return;
+      }
 
       if (isAdminRole(loginResult.role)) {
         navigate('/tenant/dashboard');

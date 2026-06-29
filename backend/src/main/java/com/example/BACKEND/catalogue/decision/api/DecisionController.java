@@ -5,6 +5,10 @@ import com.example.BACKEND.catalogue.decision.runtime.DecisionRuntime;
 import com.example.BACKEND.catalogue.decision.runtime.DecisionRuntimeException;
 import com.example.BACKEND.catalogue.semantic.phase2.SemanticPlanningProperties;
 import com.example.BACKEND.catalogue.semantic.phase2.SemanticShadowResponseMapper;
+import com.example.BACKEND.identity.auth.AuthContext;
+import com.example.BACKEND.identity.auth.AuthContextHolder;
+import com.example.BACKEND.identity.auth.ForbiddenException;
+import com.example.BACKEND.identity.auth.UnauthorizedException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -49,7 +53,13 @@ public class DecisionController {
     /**
      * Execute a decision run and return the full executive insight output.
      *
-     * Request:  { "question": "...", "tenantId": "..." }
+     * Tenant isolation: the workspace is resolved EXCLUSIVELY from the
+     * authenticated session ({@link AuthContext}). The {@code X-Client-Id}
+     * header and body {@code tenantId} are NOT trusted for tenant selection;
+     * if supplied and they disagree with the authenticated workspace the
+     * request is rejected with 403 (no silent tenant switching).
+     *
+     * Request:  { "question": "..." }   (tenant comes from the session)
      * Response: full InsightOutput with strategic implications, risks, causes.
      */
     @PostMapping("/run")
@@ -62,12 +72,26 @@ public class DecisionController {
             return ResponseEntity.badRequest().body(Map.of("error", "question is required"));
         }
 
-        String tenantId = headerTenantId != null && !headerTenantId.isBlank()
-                ? headerTenantId
-                : stringField(body, "tenantId");
-        if (tenantId == null || tenantId.isBlank()) {
-            return ResponseEntity.badRequest().body(
-                    Map.of("error", "tenantId required (header X-Client-Id or body field tenantId)"));
+        // Workspace identity comes ONLY from the authenticated session.
+        AuthContext auth = AuthContextHolder.get();
+        if (auth == null || !auth.hasWorkspace()
+                || auth.workspaceSlug() == null || auth.workspaceSlug().isBlank()) {
+            throw new UnauthorizedException("Authentication required");
+        }
+        String tenantId = auth.workspaceSlug();
+
+        // Client-supplied tenant hints may NEVER change the tenant. If present
+        // and not matching the authenticated workspace, fail closed with 403.
+        String bodyTenant = stringField(body, "tenantId");
+        boolean headerMismatch = headerTenantId != null && !headerTenantId.isBlank()
+                && !headerTenantId.trim().equals(tenantId);
+        boolean bodyMismatch = bodyTenant != null && !bodyTenant.isBlank()
+                && !bodyTenant.equals(tenantId);
+        if (headerMismatch || bodyMismatch) {
+            log.warn("[decision-api] tenant mismatch blocked — authenticated='{}' header='{}' body='{}'",
+                    tenantId, headerTenantId, bodyTenant);
+            throw new ForbiddenException(
+                    "Tenant mismatch between request and authenticated workspace.");
         }
 
         @SuppressWarnings("unchecked")
@@ -75,7 +99,7 @@ public class DecisionController {
                 ? (Map<String, Object>) body.get("meta") : Map.of();
 
         DecisionExecutionContext ctx = DecisionRuntime.contextFrom(tenantId, question, meta);
-        log.info("[decision-api] POST /run  runId={}  tenant={}", ctx.runId(), tenantId);
+        log.info("[decision-api] POST /run  runId={}  tenant={} (source=auth_context)", ctx.runId(), tenantId);
 
         try {
             DecisionRunResult result = runtime.execute(ctx);

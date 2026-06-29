@@ -8,6 +8,7 @@ import com.example.BACKEND.catalogue.decision.contracts.DecisionModels.QuerySpec
 import com.example.BACKEND.catalogue.decision.execution.repair.ExecutionDiagnosticSession;
 import com.example.BACKEND.catalogue.decision.execution.repair.ExecutionDiagnostics;
 import com.example.BACKEND.catalogue.decision.execution.repair.RepairOutcome;
+import com.example.BACKEND.identity.auth.TenantAccessGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -43,6 +44,10 @@ public class AnalyticalSqlExecutionService {
     }
 
     public QueryResult executeWithFallbacks(QuerySpec spec, TemplateContext ctx, String tenantId) {
+        // Defense in depth: assert tenant BEFORE any execution (outside the
+        // per-attempt try/catch so a mismatch aborts instead of being swallowed).
+        TenantAccessGuard.assertTenantMatchesAuthContext(tenantId);
+
         String metric = ctx.revenueMetric();
         String dimension = ctx.dimensionColumn() != null ? ctx.dimensionColumn() : "";
         String candidateId = ctx.candidateId();
@@ -109,6 +114,10 @@ public class AnalyticalSqlExecutionService {
     public List<QueryResult> executeTemplateBatch(
             List<QuerySpec> specs, String question, String tenantId, UUID runId
     ) {
+        // Defense in depth: assert tenant BEFORE the execution loop (outside the
+        // per-attempt try/catch so a mismatch aborts instead of being swallowed).
+        TenantAccessGuard.assertTenantMatchesAuthContext(tenantId);
+
         List<QueryResult> results = new ArrayList<>();
         for (QuerySpec spec : specs) {
             if (isTemplateSpec(spec)) {

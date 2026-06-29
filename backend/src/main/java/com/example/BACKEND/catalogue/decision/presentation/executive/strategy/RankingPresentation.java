@@ -42,11 +42,11 @@ public class RankingPresentation implements PresentationStrategy {
                 "Top " + measureLabel);
 
         ExecutivePresentation.ChartHint hint = ctx.chartHint(
-                "BAR", segmentLabel + " by " + measureLabel, segmentCol, measureCol, "currency");
+                "HBAR", segmentLabel + " by " + measureLabel, segmentCol, measureCol, "currency");
 
         List<String> highlights = List.of(
                 "Ranked executive table with " + displayCount + " row(s)",
-                "Recommended chart: BAR");
+                "Recommended chart: HBAR");
 
         return ExecutivePresentationFactory.create(
                 type().name(),
@@ -54,7 +54,7 @@ public class RankingPresentation implements PresentationStrategy {
                 table,
                 List.of(hint),
                 ctx.summary(type(), rows.size(), displayCount, measureLabel, segmentLabel,
-                        table.title(), "BAR", highlights),
+                        table.title(), "HBAR", highlights),
                 highlights,
                 List.of(),
                 List.of("What separates rank 1 from rank 2?", "Which segments are below the top " + displayCount + "?"));

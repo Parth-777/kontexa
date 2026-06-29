@@ -1,3 +1,5 @@
+import { getAuthHeaders } from './session';
+
 const BASE_URL = 'http://localhost:5000';
 
 export async function askQuestion(clientId, question, skipClarification = false, history = []) {
@@ -117,7 +119,7 @@ export async function runDecisionAnalysis(tenantId, question) {
   const response = await fetch(`${BASE_URL}/api/decision/v1/run`, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json',
+      ...getAuthHeaders(),
       'X-Client-Id': tenantId,
     },
     body: JSON.stringify({ question, tenantId }),
@@ -128,7 +130,9 @@ export async function runDecisionAnalysis(tenantId, question) {
 }
 
 export async function fetchPlannerStatus() {
-  const response = await fetch(`${BASE_URL}/api/decision/v1/planner/status`);
+  const response = await fetch(`${BASE_URL}/api/decision/v1/planner/status`, {
+    headers: { ...getAuthHeaders() },
+  });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || 'Failed to load planner status');
   return payload;

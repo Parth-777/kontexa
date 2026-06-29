@@ -2,6 +2,7 @@ package com.example.BACKEND.catalogue.decision.compute;
 
 import com.example.BACKEND.catalogue.decision.contracts.DecisionModels.*;
 import com.example.BACKEND.catalogue.decision.execution.sqltemplates.QueryExecutionDebugger;
+import com.example.BACKEND.identity.auth.TenantAccessGuard;
 import com.example.BACKEND.tenant.BigQueryConnectorService;
 import com.example.BACKEND.tenant.TenantCloudConnectionService;
 import com.example.BACKEND.tenant.TenantCloudConnectionService.BigQueryConfig;
@@ -44,6 +45,10 @@ public class BigQueryWarehouseExecutor implements WarehouseExecutor {
 
     @Override
     public ComputationResultSet execute(MetricPackExecutionPlan plan, String tenantId) {
+        // Defense in depth: never run against a tenant other than the one the
+        // request authenticated to. No-op when there is no request-bound session.
+        TenantAccessGuard.assertTenantMatchesAuthContext(tenantId);
+
         BigQueryConfig cfg = connectionService.getBigQueryConfig(tenantId)
                 .orElseThrow(() -> new ComputeException("No BigQuery connection for tenant: " + tenantId));
 
