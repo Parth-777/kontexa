@@ -1,0 +1,439 @@
+{
+  "info": {
+    "name": "Kontexa Multitenancy Isolation Suite",
+    "description": "Cross-tenant attack and session-authority tests. Replace {{baseUrl}}, {{token_A}}, {{token_B}}, {{runId_B}}, {{catalogueId_B}}, {{insightId_B}}.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080" },
+    { "key": "token_A", "value": "" },
+    { "key": "token_B", "value": "" },
+    { "key": "runId_B", "value": "" },
+    { "key": "catalogueId_B", "value": "" },
+    { "key": "insightId_B", "value": "" },
+    { "key": "slug_A", "value": "netflix" },
+    { "key": "slug_B", "value": "oil" }
+  ],
+  "item": [
+    {
+      "name": "00 Auth bootstrap",
+      "item": [
+        {
+          "name": "Login tenant A",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"workspaceId\": \"{{slug_A}}\",\n  \"password\": \"REPLACE_ME\",\n  \"email\": \"REPLACE_ME\"\n}"
+            },
+            "url": "{{baseUrl}}/api/auth/login"
+          }
+        },
+        {
+          "name": "Login tenant B",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"workspaceId\": \"{{slug_B}}\",\n  \"password\": \"REPLACE_ME\"\n}"
+            },
+            "url": "{{baseUrl}}/api/auth/login"
+          }
+        }
+      ]
+    },
+    {
+      "name": "01 Decision",
+      "item": [
+        {
+          "name": "PASS run with session A",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token_A}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"question\": \"What drove revenue last month?\"\n}" },
+            "url": "{{baseUrl}}/api/decision/v1/run"
+          }
+        },
+        {
+          "name": "FAIL no session → 401",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"question\": \"x\"\n}" },
+            "url": "{{baseUrl}}/api/decision/v1/run"
+          }
+        },
+        {
+          "name": "FAIL forged X-Client-Id → 403",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token_A}}" },
+              { "key": "X-Client-Id", "value": "{{slug_B}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"question\": \"x\"\n}" },
+            "url": "{{baseUrl}}/api/decision/v1/run"
+          }
+        },
+        {
+          "name": "FAIL forged body tenantId → 403",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token_A}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"question\": \"x\",\n  \"tenantId\": \"{{slug_B}}\"\n}" },
+            "url": "{{baseUrl}}/api/decision/v1/run"
+          }
+        },
+        {
+          "name": "FAIL cross-tenant runId → 404",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token_A}}" }],
+            "url": "{{baseUrl}}/api/decision/v1/run/{{runId_B}}"
+          }
+        },
+        {
+          "name": "FAIL expired/forged token → 401",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer expired.or.forged" }],
+            "url": "{{baseUrl}}/api/decision/v1/run/{{runId_B}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 Catalogue",
+      "item": [
+        {
+          "name": "PASS list session A",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token_A}}" }],
+            "url": "{{baseUrl}}/api/catalogue/list"
+          }
+        },
+        {
+          "name": "FAIL list forged clientId → 403",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token_A}}" }],
+            "url": "{{baseUrl}}/api/catalogue/list?clientId={{slug_B}}"
+          }
+        },
+        {
+          "name": "FAIL get other tenant catalogue id → 403",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token_A}}" }],
+            "url": "{{baseUrl}}/api/catalogue/{{catalogueId_B}}"
+          }
+        },
+        {
+          "name": "FAIL approve other catalogue → 403",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token_A}}" }],
+            "url": "{{baseUrl}}/api/catalogue/{{catalogueId_B}}/approve"
+          }
+        },
+        {
+          "name": "ATTACK discover body schema=other (expect FAIL if local PG path)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token_A}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"schema\": \"{{slug_B}}\"\n}" },
+            "url": "{{baseUrl}}/api/catalogue/discover"
+          }
+        },
+        {
+          "name": "FAIL no session catalogue list → 401",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/catalogue/list"
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 Connectors",
+      "item": [
+        {
+          "name": "PASS get own bigquery config",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token_A}}" }],
+            "url": "{{baseUrl}}/api/auth/tenant/bigquery/config"
+          }
+        },
+        {
+          "name": "FAIL forged tenantId query → 403",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token_A}}" }],
+            "url": "{{baseUrl}}/api/auth/tenant/bigquery/config?tenantId={{slug_B}}"
+          }
+        },
+        {
+          "name": "FAIL forged cloud-link tenantId → 403",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token_A}}" }],
+            "url": "{{baseUrl}}/api/auth/tenant/cloud-link?tenantId={{slug_B}}"
+          }
+        },
+        {
+          "name": "FAIL no session connector → 401",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/auth/tenant/snowflake/tables"
+          }
+        },
+        {
+          "name": "FAIL connect saves under forged body tenantId → 403",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token_A}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tenantId\": \"{{slug_B}}\",\n  \"projectId\": \"x\",\n  \"dataset\": \"y\",\n  \"serviceAccountJson\": \"{}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/auth/tenant/bigquery/connect"
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 Users",
+      "item": [
+        {
+          "name": "PASS list own users",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token_A}}" }],
+            "url": "{{baseUrl}}/api/tenant/users"
+          }
+        },
+        {
+          "name": "FAIL list with forged tenantId → 403",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token_A}}" }],
+            "url": "{{baseUrl}}/api/tenant/users?tenantId={{slug_B}}"
+          }
+        },
+        {
+          "name": "FAIL create user for other tenant → 403",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token_A}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tenantId\": \"{{slug_B}}\",\n  \"userId\": \"attacker\",\n  \"password\": \"x\",\n  \"position\": \"Viewer\"\n}"
+            },
+            "url": "{{baseUrl}}/api/tenant/users"
+          }
+        },
+        {
+          "name": "FAIL no session → 401",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/tenant/users"
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 Agent / reports / dashboard",
+      "item": [
+        {
+          "name": "PASS insights session A",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token_A}}" }],
+            "url": "{{baseUrl}}/api/agent/insights"
+          }
+        },
+        {
+          "name": "FAIL forged X-Client-Id → 403",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token_A}}" },
+              { "key": "X-Client-Id", "value": "{{slug_B}}" }
+            ],
+            "url": "{{baseUrl}}/api/agent/insights"
+          }
+        },
+        {
+          "name": "FAIL evidence other tenant insight → 404",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token_A}}" }],
+            "url": "{{baseUrl}}/api/agent/insights/{{insightId_B}}/evidence"
+          }
+        },
+        {
+          "name": "FAIL patch other insight → 404",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token_A}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"COMPLETED\"\n}" },
+            "url": "{{baseUrl}}/api/agent/insights/{{insightId_B}}/status"
+          }
+        },
+        {
+          "name": "PASS reports",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token_A}}" }],
+            "url": "{{baseUrl}}/api/agent/reports"
+          }
+        },
+        {
+          "name": "FAIL reports forged clientId → 403",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token_A}}" }],
+            "url": "{{baseUrl}}/api/agent/reports?clientId={{slug_B}}"
+          }
+        },
+        {
+          "name": "PASS dashboard",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token_A}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{}" },
+            "url": "{{baseUrl}}/api/agent/dashboard"
+          }
+        },
+        {
+          "name": "FAIL query ask forged clientId → 403",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token_A}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"hi\",\n  \"clientId\": \"{{slug_B}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/query/ask"
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 Workspace auth",
+      "item": [
+        {
+          "name": "PASS list workspaces session",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token_A}}" }],
+            "url": "{{baseUrl}}/api/auth/workspaces"
+          }
+        },
+        {
+          "name": "FAIL list workspaces forged email → 403",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token_A}}" }],
+            "url": "{{baseUrl}}/api/auth/workspaces?email=victim@other.com"
+          }
+        },
+        {
+          "name": "FAIL switch to non-member workspace → 403",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token_A}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"workspaceSlug\": \"{{slug_B}}\"\n}" },
+            "url": "{{baseUrl}}/api/auth/switch-workspace"
+          }
+        },
+        {
+          "name": "PASS members list",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token_A}}" }],
+            "url": "{{baseUrl}}/api/workspace/members"
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 Critical attack surface (must FAIL closed in prod)",
+      "item": [
+        {
+          "name": "CRITICAL unauthenticated migrate status (expect 401 after fix; may be 200 TODAY)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/admin/identity/migrate/status"
+          }
+        },
+        {
+          "name": "CRITICAL unauthenticated migrate rollback dry-run (expect 401 after fix)",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/admin/identity/migrate/rollback?confirm=false"
+          }
+        },
+        {
+          "name": "CRITICAL authenticated arbitrary SQL debug (expect disabled/403 in prod)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token_A}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sql\": \"SELECT slug FROM workspaces\"\n}"
+            },
+            "url": "{{baseUrl}}/api/debug/run"
+          }
+        },
+        {
+          "name": "CRITICAL analytics query shared DB (expect disabled in prod)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token_A}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"query\": \"show visits\"\n}" },
+            "url": "{{baseUrl}}/api/analytics/query"
+          }
+        }
+      ]
+    }
+  ]
+}

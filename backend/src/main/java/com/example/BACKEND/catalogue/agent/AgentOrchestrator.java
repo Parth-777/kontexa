@@ -530,6 +530,7 @@ public class AgentOrchestrator {
         try {
             AgentRunEntity run = new AgentRunEntity();
             run.setClientId(clientId);
+            com.example.BACKEND.tenancy.TenantIdBinder.bind(run::setTenantId);
             run.setStartedAt(started);
             run.setFinishedAt(LocalDateTime.now());
             run.setQueriesRun(runContext.queriesRun());
@@ -925,6 +926,7 @@ public class AgentOrchestrator {
         for (AgentDashboardResult.InsightCard card : insights) {
             InsightCardEntity e = new InsightCardEntity();
             e.setClientId(clientId);
+            com.example.BACKEND.tenancy.TenantIdBinder.bind(e::setTenantId);
             e.setTitle(card.getTitle());
             e.setDescription(card.getDescription());
             e.setImpactLevel(card.getImpactLevel());
@@ -1057,8 +1059,11 @@ public class AgentOrchestrator {
      * Returns empty if the card is not found or belongs to a different client.
      */
     public java.util.Optional<EvidenceResult> getInsightEvidence(java.util.UUID cardId, String clientId) {
+        if (clientId == null || clientId.isBlank()) {
+            return java.util.Optional.empty();
+        }
         return insightCardRepository.findById(cardId)
-                .filter(c -> clientId == null || clientId.equals(c.getClientId()))
+                .filter(c -> clientId.equals(c.getClientId()))
                 .map(c -> new EvidenceResult(
                         c.getSourceColumns() != null ? c.getSourceColumns() : "[]",
                         c.getRawEvidence()   != null ? c.getRawEvidence()   : "[]"

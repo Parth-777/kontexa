@@ -1,5 +1,7 @@
 package com.example.BACKEND.catalogue.semantic.phase2;
 
+import com.fasterxml.jackson.databind.JsonNode;
+
 import java.util.List;
 
 /**
@@ -20,7 +22,9 @@ public record StructuredSemanticPlan(
         String reasoning,
         List<StructuredSemanticPlan> alternatives,
         String executionMode,
-        String investigationDirection
+        String investigationDirection,
+        JsonNode investigationObjective,
+        JsonNode investigationPlan
 ) {
     public static final String MODE_CANONICAL = "CANONICAL";
     public static final String MODE_INVESTIGATION = "INVESTIGATION";
@@ -47,7 +51,31 @@ public record StructuredSemanticPlan(
     ) {
         this(intent, metric, secondaryMetric, dimensions, filters, aggregations,
                 ordering, limit, relationshipVariable, timeGrain, confidence,
-                reasoning, alternatives, MODE_CANONICAL, null);
+                reasoning, alternatives, MODE_CANONICAL, null, null, null);
+    }
+
+    public StructuredSemanticPlan(
+            String intent,
+            String metric,
+            String secondaryMetric,
+            List<String> dimensions,
+            List<SemanticFilter> filters,
+            SemanticAggregations aggregations,
+            SemanticOrdering ordering,
+            Integer limit,
+            String relationshipVariable,
+            String timeGrain,
+            double confidence,
+            String reasoning,
+            List<StructuredSemanticPlan> alternatives,
+            String executionMode,
+            String investigationDirection,
+            JsonNode investigationObjective
+    ) {
+        this(intent, metric, secondaryMetric, dimensions, filters, aggregations,
+                ordering, limit, relationshipVariable, timeGrain, confidence,
+                reasoning, alternatives, executionMode, investigationDirection,
+                investigationObjective, null);
     }
 
     public boolean requiresInvestigation() {
@@ -64,6 +92,6 @@ public record StructuredSemanticPlan(
         return new StructuredSemanticPlan(
                 "DISTRIBUTION", null, null, List.of(), List.of(),
                 new SemanticAggregations(null, null), null, null, null, null,
-                0.0, reasoning, List.of());
+                0.0, reasoning, List.of(), MODE_CANONICAL, null, null, null);
     }
 }

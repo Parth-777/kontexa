@@ -95,7 +95,7 @@ function HomePage() {
 
       {/* ── Hero ──────────────────────────────────────────────────────── */}
       <section className="hp-hero">
-        <p className="hp-hero-eyebrow">Decision Intelligence Platform</p>
+        <p className="hp-hero-eyebrow">Business Intelligence Made Easy </p>
         <h1 className="hp-hero-h1">
           Understand what changed.<br />
           <span className="hp-hero-h1-accent">Act on what matters.</span>

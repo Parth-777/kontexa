@@ -93,11 +93,17 @@ public class SemanticPlanValidator {
 
 
 
-        if (plan.metric() != null && !plan.metric().isBlank()
+        if (plan.metric() != null && !plan.metric().isBlank()) {
 
-                && catalogue.metricColumns().stream().noneMatch(m -> m.equalsIgnoreCase(plan.metric()))) {
+            if (catalogue.isContainer(plan.metric())) {
 
-            issues.add("INVALID_METRIC: " + plan.metric());
+                issues.add("NESTED_CONTAINER_METRIC: " + plan.metric());
+
+            } else if (catalogue.metricColumns().stream().noneMatch(m -> m.equalsIgnoreCase(plan.metric()))) {
+
+                issues.add("INVALID_METRIC: " + plan.metric());
+
+            }
 
         }
 
@@ -137,7 +143,11 @@ public class SemanticPlanValidator {
 
         for (String dim : plan.dimensions()) {
 
-            if (!catalogue.dimensionColumns().stream().anyMatch(d -> d.equalsIgnoreCase(dim))) {
+            if (catalogue.isContainer(dim)) {
+
+                issues.add("NESTED_CONTAINER_DIMENSION: " + dim);
+
+            } else if (!catalogue.dimensionColumns().stream().anyMatch(d -> d.equalsIgnoreCase(dim))) {
 
                 issues.add("INVALID_DIMENSION: " + dim);
 
@@ -149,7 +159,11 @@ public class SemanticPlanValidator {
 
         for (StructuredSemanticPlan.SemanticFilter f : plan.filters()) {
 
-            if (!catalogue.hasColumn(f.column())) {
+            if (catalogue.isContainer(f.column())) {
+
+                issues.add("NESTED_CONTAINER_FILTER: " + f.column());
+
+            } else if (!catalogue.hasColumn(f.column()) || !catalogue.isBindableLeaf(f.column())) {
 
                 issues.add("INVALID_FILTER_COLUMN: " + f.column());
 

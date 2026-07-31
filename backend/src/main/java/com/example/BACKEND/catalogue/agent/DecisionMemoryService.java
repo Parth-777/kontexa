@@ -38,6 +38,11 @@ public class DecisionMemoryService {
 
         DecisionMemoryEntity memory = new DecisionMemoryEntity();
         memory.setClientId(card.getClientId());
+        if (card.getTenantId() != null) {
+            memory.setTenantId(card.getTenantId());
+        } else {
+            com.example.BACKEND.tenancy.TenantIdBinder.bind(memory::setTenantId);
+        }
         memory.setBadge(card.getBadge());
         memory.setAgentName(card.getAgentName());
         memory.setImpactLevel(card.getImpactLevel());

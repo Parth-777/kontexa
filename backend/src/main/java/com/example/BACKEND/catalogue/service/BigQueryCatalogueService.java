@@ -3,9 +3,12 @@ package com.example.BACKEND.catalogue.service;
 import com.example.BACKEND.catalogue.model.CatalogueResult;
 import com.example.BACKEND.catalogue.model.ColumnInfo;
 import com.example.BACKEND.catalogue.model.TableInfo;
+import com.example.BACKEND.catalogue.schema.NestedSchemaDiscoverer;
+import com.example.BACKEND.catalogue.schema.NestedSchemaDiscoverer.DiscoveredField;
+import com.example.BACKEND.catalogue.schema.NestedSchemaFieldGraph;
+import com.example.BACKEND.catalogue.schema.SqlFieldReferenceEmitter;
 import com.example.BACKEND.tenant.BigQueryConnectorService;
 import com.example.BACKEND.tenant.TenantCloudConnectionService;
-import com.google.cloud.bigquery.Field;
 import com.google.cloud.bigquery.Schema;
 import com.google.cloud.bigquery.StandardTableDefinition;
 import com.google.cloud.bigquery.Table;
@@ -50,17 +53,13 @@ public class BigQueryCatalogueService {
                 tableInfo.setRowCount(rows == null ? -1 : rows);
                 Schema schema = stdDef.getSchema();
                 if (schema != null && schema.getFields() != null) {
-                    for (Field field : schema.getFields()) {
-                        ColumnInfo col = new ColumnInfo(
-                                field.getName(),
-                                field.getType() == null ? "" : field.getType().name().toLowerCase(),
-                                !"REQUIRED".equalsIgnoreCase(field.getMode() == null ? "" : field.getMode().name())
-                        );
-                        if (withSampling) {
+                    NestedSchemaDiscoverer.discoverBigQueryFields(schema.getFields(), discovered -> {
+                        ColumnInfo col = toColumnInfo(discovered);
+                        if (withSampling && !col.isContainer()) {
                             sampleColumn(config, tableName, col);
                         }
                         tableInfo.addColumn(col);
-                    }
+                    });
                 }
             }
             result.addTable(tableInfo);
@@ -68,9 +67,23 @@ public class BigQueryCatalogueService {
         return result;
     }
 
+    private static ColumnInfo toColumnInfo(DiscoveredField discovered) {
+        ColumnInfo col = new ColumnInfo(
+                discovered.fieldPath(),
+                discovered.dataType(),
+                discovered.nullable());
+        col.setContainer(discovered.container());
+        col.setParentPath(NestedSchemaFieldGraph.parentPath(discovered.fieldPath()));
+        col.setFieldMode(discovered.mode());
+        if (discovered.container()) {
+            col.setRole(NestedSchemaFieldGraph.ROLE_CONTAINER);
+        }
+        return col;
+    }
+
     private void sampleColumn(TenantCloudConnectionService.BigQueryConfig config, String tableName, ColumnInfo col) {
         String type = col.getDataType().toLowerCase();
-        String columnRef = "`" + col.getColumnName() + "`";
+        String columnRef = SqlFieldReferenceEmitter.emitQuotedReference(col.getColumnName());
         String tableRef = "`" + config.projectId() + "." + config.dataset() + "." + tableName + "`";
         try {
             if (isTextType(type)) {

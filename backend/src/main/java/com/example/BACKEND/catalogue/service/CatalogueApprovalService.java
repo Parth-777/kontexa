@@ -9,6 +9,12 @@ import com.example.BACKEND.catalogue.entity.CatalogueTableEntity;
 import com.example.BACKEND.catalogue.entity.ClientCatalogueEntity;
 import com.example.BACKEND.catalogue.repository.CatalogueSnapshotRepository;
 import com.example.BACKEND.catalogue.repository.ClientCatalogueRepository;
+import com.example.BACKEND.catalogue.schema.NestedSchemaFieldGraph;
+import com.example.BACKEND.identity.auth.ForbiddenException;
+import com.example.BACKEND.tenancy.TenantContext;
+import com.example.BACKEND.tenancy.TenantContextHolder;
+import com.example.BACKEND.tenancy.TenantOwnership;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -65,18 +71,12 @@ public class CatalogueApprovalService {
     }
 
     /**
-     * Approve a catalogue.
+     * Approve a catalogue owned by {@code expectedClientId}.
      * Flips status to APPROVED and writes the full catalogue snapshot.
      */
     @Transactional
-    public ClientCatalogueEntity approve(Long catalogueId) {
-        return approve(catalogueId, null);
-    }
-
-    @Transactional
     public ClientCatalogueEntity approve(Long catalogueId, String expectedClientId) {
-        ClientCatalogueEntity catalogue = findOrThrow(catalogueId);
-        assertClientMatch(catalogue, expectedClientId);
+        ClientCatalogueEntity catalogue = requireOwned(catalogueId, expectedClientId);
         catalogue.setStatus("APPROVED");
         catalogue.setUpdatedAt(LocalDateTime.now());
         catalogueRepo.save(catalogue);
@@ -97,11 +97,12 @@ public class CatalogueApprovalService {
             System.out.println("[Approval] Star schema detection failed (non-fatal): " + e.getMessage());
         }
 
-        // Upsert snapshot for this client to avoid unique-key collisions on client_id.
-        CatalogueSnapshotEntity snapshot = snapshotRepo.findByClientId(catalogue.getClientId())
+        // Upsert snapshot — dual-write tenant_id + legacy client_id.
+        CatalogueSnapshotEntity snapshot = findSnapshotForCatalogue(catalogue)
                 .orElseGet(CatalogueSnapshotEntity::new);
         snapshot.setCatalogueId(catalogue.getId());
         snapshot.setClientId(catalogue.getClientId());
+        snapshot.setTenantId(catalogue.getTenantId());
         snapshot.setCatalogueJson(serializeCatalogue(catalogue));
         snapshot.setCreatedAt(LocalDateTime.now());
         snapshotRepo.save(snapshot);
@@ -126,17 +127,11 @@ public class CatalogueApprovalService {
     }
 
     /**
-     * Reject a catalogue (needs rework / re-run).
+     * Reject a catalogue owned by {@code expectedClientId}.
      */
     @Transactional
-    public ClientCatalogueEntity reject(Long catalogueId) {
-        return reject(catalogueId, null);
-    }
-
-    @Transactional
     public ClientCatalogueEntity reject(Long catalogueId, String expectedClientId) {
-        ClientCatalogueEntity catalogue = findOrThrow(catalogueId);
-        assertClientMatch(catalogue, expectedClientId);
+        ClientCatalogueEntity catalogue = requireOwned(catalogueId, expectedClientId);
         catalogue.setStatus("REJECTED");
         catalogue.setUpdatedAt(LocalDateTime.now());
         return catalogueRepo.save(catalogue);
@@ -144,9 +139,19 @@ public class CatalogueApprovalService {
 
     /**
      * List all catalogues for a given client (any status).
+     * Kept for DecisionRuntime adapters that still key by workspace slug.
      */
     public List<ClientCatalogueEntity> listForClient(String clientId) {
         return catalogueRepo.findByClientId(clientId);
+    }
+
+    /** Prefer UUID tenant_id; fall back to legacy slug when unmapped rows remain. */
+    public List<ClientCatalogueEntity> listForTenant(TenantContext ctx) {
+        List<ClientCatalogueEntity> byId = catalogueRepo.findByTenantId(ctx.tenantId());
+        if (!byId.isEmpty()) {
+            return byId;
+        }
+        return catalogueRepo.findByClientId(ctx.legacyTenantKey());
     }
 
     /**
@@ -166,41 +171,75 @@ public class CatalogueApprovalService {
     }
 
     public ClientCatalogueEntity getForClient(Long catalogueId, String expectedClientId) {
+        return requireOwned(catalogueId, expectedClientId);
+    }
+
+    /**
+     * Load a catalogue by id only if it belongs to the authenticated tenant.
+     * Resource id alone is never sufficient.
+     */
+    public ClientCatalogueEntity requireOwned(Long catalogueId, TenantContext ctx) {
         ClientCatalogueEntity catalogue = findOrThrow(catalogueId);
-        assertClientMatch(catalogue, expectedClientId);
+        TenantOwnership.requireMatch(
+                catalogue.getTenantId(), catalogue.getClientId(), ctx, "Catalogue " + catalogueId);
+        // Heal missing tenant_id on read path (post-backfill safety).
+        if (catalogue.getTenantId() == null) {
+            catalogue.setTenantId(ctx.tenantId());
+            catalogueRepo.save(catalogue);
+        }
         return catalogue;
     }
 
-    public ClientCatalogueEntity getForTenantContext(
-            Long catalogueId,
-            String tenantId,
-            String tenantSchema,
-            String explicitClientId
-    ) {
+    /**
+     * Load a catalogue by id only if it belongs to {@code ownerClientId} (legacy slug).
+     * When a request-bound {@link TenantContext} exists, UUID ownership is preferred.
+     */
+    public ClientCatalogueEntity requireOwned(Long catalogueId, String ownerClientId) {
+        TenantContext ctx = TenantContextHolder.get();
+        if (ctx != null) {
+            return requireOwned(catalogueId, ctx);
+        }
+        if (ownerClientId == null || ownerClientId.isBlank()) {
+            throw new ForbiddenException("Authenticated tenant key is required");
+        }
         ClientCatalogueEntity catalogue = findOrThrow(catalogueId);
-        Set<String> keys = buildLookupKeys(tenantId, tenantSchema);
-        addKeyVariants(keys, explicitClientId);
-        if (keys.isEmpty()) {
-            return catalogue;
-        }
-        for (String key : keys) {
-            if (catalogue.getClientId().equalsIgnoreCase(key) || catalogue.getSchemaName().equalsIgnoreCase(key)) {
-                return catalogue;
-            }
-        }
-        throw new IllegalArgumentException(
-                "Catalogue " + catalogueId + " does not belong to provided tenant context");
+        assertClientMatch(catalogue, ownerClientId);
+        return catalogue;
     }
 
     @Transactional
-    public ClientCatalogueEntity updateFromTenantContext(
+    public ClientCatalogueEntity updateOwned(
             Long catalogueId,
-            String tenantId,
-            String tenantSchema,
-            String explicitClientId,
+            TenantContext ctx,
             List<Map<String, Object>> tableUpdates
     ) {
-        ClientCatalogueEntity catalogue = getForTenantContext(catalogueId, tenantId, tenantSchema, explicitClientId);
+        ClientCatalogueEntity catalogue = requireOwned(catalogueId, ctx);
+        if (tableUpdates != null) {
+            applyTableUpdates(catalogue, tableUpdates);
+        }
+        catalogue.setUpdatedAt(LocalDateTime.now());
+        if (catalogue.getTenantId() == null) {
+            catalogue.setTenantId(ctx.tenantId());
+        }
+        ClientCatalogueEntity saved = catalogueRepo.save(catalogue);
+
+        if ("APPROVED".equalsIgnoreCase(saved.getStatus())) {
+            upsertSnapshot(saved);
+        }
+        return saved;
+    }
+
+    @Transactional
+    public ClientCatalogueEntity updateOwned(
+            Long catalogueId,
+            String ownerClientId,
+            List<Map<String, Object>> tableUpdates
+    ) {
+        TenantContext ctx = TenantContextHolder.get();
+        if (ctx != null) {
+            return updateOwned(catalogueId, ctx, tableUpdates);
+        }
+        ClientCatalogueEntity catalogue = requireOwned(catalogueId, ownerClientId);
         if (tableUpdates != null) {
             applyTableUpdates(catalogue, tableUpdates);
         }
@@ -211,6 +250,32 @@ public class CatalogueApprovalService {
             upsertSnapshot(saved);
         }
         return saved;
+    }
+
+    /** @deprecated Prefer {@link #requireOwned(Long, String)} — client keys must come from TenantContext. */
+    @Deprecated
+    public ClientCatalogueEntity getForTenantContext(
+            Long catalogueId,
+            String tenantId,
+            String tenantSchema,
+            String explicitClientId
+    ) {
+        String owner = firstNonBlank(explicitClientId, tenantId, tenantSchema);
+        return requireOwned(catalogueId, owner);
+    }
+
+    /** @deprecated Prefer {@link #updateOwned(Long, String, List)}. */
+    @Deprecated
+    @Transactional
+    public ClientCatalogueEntity updateFromTenantContext(
+            Long catalogueId,
+            String tenantId,
+            String tenantSchema,
+            String explicitClientId,
+            List<Map<String, Object>> tableUpdates
+    ) {
+        String owner = firstNonBlank(explicitClientId, tenantId, tenantSchema);
+        return updateOwned(catalogueId, owner, tableUpdates);
     }
 
     /**
@@ -242,10 +307,24 @@ public class CatalogueApprovalService {
     private String serializeCatalogue(ClientCatalogueEntity catalogue) {
         try {
             ObjectNode root = objectMapper.createObjectNode();
+            // catalogueId anchors the published blob to a specific relational version
+            // (future multi-version evolution can keep history without reshaping JSON).
+            root.put("catalogueId",  catalogue.getId());
             root.put("clientId",     catalogue.getClientId());
             root.put("schemaName",   catalogue.getSchemaName());
             root.put("databaseName", catalogue.getDatabaseName() != null
                     ? catalogue.getDatabaseName() : "");
+            if (catalogue.getLineageKey() != null && !catalogue.getLineageKey().isBlank()) {
+                root.put("lineageKey", catalogue.getLineageKey());
+            }
+            if (catalogue.getSupersedesCatalogueId() != null) {
+                root.put("supersedesCatalogueId", catalogue.getSupersedesCatalogueId());
+            }
+            root.put("businessProfile", catalogue.getBusinessProfile() != null
+                    ? catalogue.getBusinessProfile() : "");
+            // Stored as JSON text on the entity; re-emit as raw JSON nodes when valid.
+            root.set("globalCaveats", readJsonOrEmptyArray(catalogue.getGlobalCaveats()));
+            root.set("entities", readJsonOrEmptyArray(catalogue.getEntitiesJson()));
 
             ArrayNode tablesArray = objectMapper.createArrayNode();
 
@@ -268,16 +347,26 @@ public class CatalogueApprovalService {
                     colNode.put("dataType",         col.getDataType() != null ? col.getDataType() : "");
                     colNode.put("description",      col.getDescription() != null ? col.getDescription() : "");
                     colNode.put("role",             col.getRole() != null ? col.getRole() : "");
+                    boolean container = NestedSchemaFieldGraph.ROLE_CONTAINER.equalsIgnoreCase(col.getRole())
+                            || NestedSchemaFieldGraph.isNestedContainerType(col.getDataType());
+                    colNode.put("container", container);
+                    String parentPath = NestedSchemaFieldGraph.parentPath(col.getColumnName());
+                    if (parentPath != null) {
+                        colNode.put("parentPath", parentPath);
+                    }
                     colNode.put("synonyms",         col.getSynonyms() != null ? col.getSynonyms() : "[]");
                     colNode.put("valueMeanings",    col.getValueMeanings() != null ? col.getValueMeanings() : "{}");
                     colNode.put("sampleValues",     col.getSampleValues() != null ? col.getSampleValues() : "[]");
                     colNode.put("minValue",         col.getMinValue() != null ? col.getMinValue() : "");
                     colNode.put("maxValue",         col.getMaxValue() != null ? col.getMaxValue() : "");
-                    // Semantic enrichment fields
+                    // Semantic enrichment — businessMeaning is the primary meaning SoT
                     colNode.put("aggregationMethod", col.getAggregationMethod() != null ? col.getAggregationMethod() : "NONE");
                     colNode.put("businessMeaning",   col.getBusinessMeaning()   != null ? col.getBusinessMeaning()   : "");
                     colNode.put("comparisonPeriod",  col.getComparisonPeriod()  != null ? col.getComparisonPeriod()  : "NONE");
                     colNode.put("dateGranularity",   col.getDateGranularity()   != null ? col.getDateGranularity()   : "N/A");
+                    if (col.getConfidence() != null) {
+                        colNode.put("confidence", col.getConfidence());
+                    }
                     columnsArray.add(colNode);
                 }
 
@@ -293,14 +382,39 @@ public class CatalogueApprovalService {
         }
     }
 
+    private JsonNode readJsonOrEmptyArray(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return objectMapper.createArrayNode();
+        }
+        try {
+            JsonNode node = objectMapper.readTree(raw);
+            return node != null ? node : objectMapper.createArrayNode();
+        } catch (Exception e) {
+            return objectMapper.createArrayNode();
+        }
+    }
+
     private void upsertSnapshot(ClientCatalogueEntity catalogue) {
-        CatalogueSnapshotEntity snapshot = snapshotRepo.findByClientId(catalogue.getClientId())
+        CatalogueSnapshotEntity snapshot = findSnapshotForCatalogue(catalogue)
                 .orElseGet(CatalogueSnapshotEntity::new);
         snapshot.setCatalogueId(catalogue.getId());
         snapshot.setClientId(catalogue.getClientId());
+        snapshot.setTenantId(catalogue.getTenantId());
         snapshot.setCatalogueJson(serializeCatalogue(catalogue));
         snapshot.setCreatedAt(LocalDateTime.now());
         snapshotRepo.save(snapshot);
+    }
+
+    private java.util.Optional<CatalogueSnapshotEntity> findSnapshotForCatalogue(
+            ClientCatalogueEntity catalogue) {
+        if (catalogue.getTenantId() != null) {
+            java.util.Optional<CatalogueSnapshotEntity> byTenant =
+                    snapshotRepo.findByTenantId(catalogue.getTenantId());
+            if (byTenant.isPresent()) {
+                return byTenant;
+            }
+        }
+        return snapshotRepo.findByClientId(catalogue.getClientId());
     }
 
     private void applyTableUpdates(ClientCatalogueEntity catalogue, List<Map<String, Object>> tableUpdates) {
@@ -377,11 +491,31 @@ public class CatalogueApprovalService {
     }
 
     private void assertClientMatch(ClientCatalogueEntity catalogue, String expectedClientId) {
-        if (expectedClientId == null || expectedClientId.isBlank()) return;
-        if (!catalogue.getClientId().equalsIgnoreCase(expectedClientId)) {
-            throw new IllegalArgumentException(
-                    "Catalogue " + catalogue.getId() + " does not belong to client: " + expectedClientId);
+        if (expectedClientId == null || expectedClientId.isBlank()) {
+            throw new ForbiddenException("Authenticated tenant key is required");
         }
+        String owner = catalogue.getClientId();
+        String schema = catalogue.getSchemaName();
+        boolean match = owner != null && owner.equalsIgnoreCase(expectedClientId.trim());
+        if (!match && schema != null && schema.equalsIgnoreCase(expectedClientId.trim())) {
+            match = true;
+        }
+        if (!match) {
+            throw new ForbiddenException(
+                    "Catalogue " + catalogue.getId() + " does not belong to authenticated tenant");
+        }
+    }
+
+    private static String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String v : values) {
+            if (v != null && !v.isBlank()) {
+                return v.trim();
+            }
+        }
+        return null;
     }
 
 }

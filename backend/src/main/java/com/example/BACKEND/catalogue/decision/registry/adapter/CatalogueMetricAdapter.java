@@ -5,6 +5,7 @@ import com.example.BACKEND.catalogue.entity.CatalogueColumnEntity;
 import com.example.BACKEND.catalogue.entity.CatalogueTableEntity;
 import com.example.BACKEND.catalogue.entity.ClientCatalogueEntity;
 import com.example.BACKEND.catalogue.service.CatalogueApprovalService;
+import com.example.BACKEND.catalogue.schema.NestedSchemaFieldGraph;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -65,6 +66,10 @@ public class CatalogueMetricAdapter {
     }
 
     private boolean isMetricColumn(CatalogueColumnEntity col) {
+        if (NestedSchemaFieldGraph.ROLE_CONTAINER.equalsIgnoreCase(col.getRole())
+                || NestedSchemaFieldGraph.isNestedContainerType(col.getDataType())) {
+            return false;
+        }
         if ("metric".equalsIgnoreCase(col.getRole())) return true;
         String t = col.getDataType() == null ? "" : col.getDataType().toLowerCase();
         return NUMERIC_TYPES.stream().anyMatch(t::contains);

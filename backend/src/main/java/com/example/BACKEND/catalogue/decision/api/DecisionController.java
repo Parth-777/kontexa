@@ -3,12 +3,12 @@ package com.example.BACKEND.catalogue.decision.api;
 import com.example.BACKEND.catalogue.decision.contracts.DecisionModels.*;
 import com.example.BACKEND.catalogue.decision.runtime.DecisionRuntime;
 import com.example.BACKEND.catalogue.decision.runtime.DecisionRuntimeException;
+import com.example.BACKEND.catalogue.investigation.Phase2InvestigationPathTrace;
 import com.example.BACKEND.catalogue.semantic.phase2.SemanticPlanningProperties;
 import com.example.BACKEND.catalogue.semantic.phase2.SemanticShadowResponseMapper;
-import com.example.BACKEND.identity.auth.AuthContext;
-import com.example.BACKEND.identity.auth.AuthContextHolder;
 import com.example.BACKEND.identity.auth.ForbiddenException;
-import com.example.BACKEND.identity.auth.UnauthorizedException;
+import com.example.BACKEND.tenancy.TenantContext;
+import com.example.BACKEND.tenancy.TenantContextHolder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -54,7 +54,7 @@ public class DecisionController {
      * Execute a decision run and return the full executive insight output.
      *
      * Tenant isolation: the workspace is resolved EXCLUSIVELY from the
-     * authenticated session ({@link AuthContext}). The {@code X-Client-Id}
+     * authenticated {@link TenantContext}. The {@code X-Client-Id}
      * header and body {@code tenantId} are NOT trusted for tenant selection;
      * if supplied and they disagree with the authenticated workspace the
      * request is rejected with 403 (no silent tenant switching).
@@ -72,13 +72,11 @@ public class DecisionController {
             return ResponseEntity.badRequest().body(Map.of("error", "question is required"));
         }
 
-        // Workspace identity comes ONLY from the authenticated session.
-        AuthContext auth = AuthContextHolder.get();
-        if (auth == null || !auth.hasWorkspace()
-                || auth.workspaceSlug() == null || auth.workspaceSlug().isBlank()) {
-            throw new UnauthorizedException("Authentication required");
+        TenantContext tenant = TenantContextHolder.require();
+        String tenantId = tenant.legacyTenantKey();
+        if (tenantId.isBlank()) {
+            throw new ForbiddenException("Authenticated workspace slug is required");
         }
-        String tenantId = auth.workspaceSlug();
 
         // Client-supplied tenant hints may NEVER change the tenant. If present
         // and not matching the authenticated workspace, fail closed with 403.
@@ -99,15 +97,42 @@ public class DecisionController {
                 ? (Map<String, Object>) body.get("meta") : Map.of();
 
         DecisionExecutionContext ctx = DecisionRuntime.contextFrom(tenantId, question, meta);
-        log.info("[decision-api] POST /run  runId={}  tenant={} (source=auth_context)", ctx.runId(), tenantId);
+        log.info("[decision-api] POST /run  runId={}  tenant={} (source=tenant_context)", ctx.runId(), tenantId);
 
         try {
             DecisionRunResult result = runtime.execute(ctx);
-            return ResponseEntity.ok(responseMapper.toRunResponse(ctx.runId(), result, meta));
+            try {
+                return ResponseEntity.ok(responseMapper.toRunResponse(ctx.runId(), result, meta));
+            } catch (Exception mapEx) {
+                // Response shaping failures still surface as Internal Server Error — capture Phase 2 path.
+                Phase2InvestigationPathTrace t = Phase2InvestigationPathTrace.current();
+                if (t != null) {
+                    t.setException(mapEx);
+                    t.setRootCauseSummary(
+                            "Failed while mapping DecisionRunResult to HTTP response: "
+                                    + mapEx.getClass().getName() + ": " + mapEx.getMessage());
+                    t.writeToFile("response_mapper_" + ctx.runId());
+                    t.logSummary();
+                }
+                log.error("[decision-api] response mapping failed  runId={}  error={}",
+                        ctx.runId(), mapEx.getMessage(), mapEx);
+                throw mapEx;
+            }
         } catch (DecisionRuntimeException ex) {
-            log.error("[decision-api] run failed  runId={}  error={}", ctx.runId(), ex.getMessage());
+            Phase2InvestigationPathTrace t = Phase2InvestigationPathTrace.current();
+            if (t != null) {
+                t.setException(ex);
+                if (t.snapshot().get("exact_root_cause") == null) {
+                    t.setRootCauseSummary(ex.getMessage());
+                }
+                t.writeToFile("decision_runtime_" + ctx.runId());
+                t.logSummary();
+            }
+            log.error("[decision-api] run failed  runId={}  error={}", ctx.runId(), ex.getMessage(), ex);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("runId", ctx.runId().toString(), "error", ex.getMessage()));
+        } finally {
+            Phase2InvestigationPathTrace.clear();
         }
     }
 
@@ -117,12 +142,19 @@ public class DecisionController {
         return ResponseEntity.ok(shadowResponseMapper.plannerStatus(plannerProperties));
     }
 
-    /** Poll run status by ID. */
+    /** Poll run status by ID — ownership required (run UUID alone is insufficient). */
     @GetMapping("/run/{runId}")
     public ResponseEntity<?> runStatus(@PathVariable String runId) {
         try {
             UUID id = UUID.fromString(runId);
             ExecutionRun run = runtime.status(id);
+            TenantContext tenant = TenantContextHolder.require();
+            String tenantKey = tenant.legacyTenantKey();
+            if (run.tenantId() == null || !tenantKey.equals(run.tenantId())) {
+                log.warn("[decision-api] cross-tenant run status blocked — runTenant='{}' auth='{}'",
+                        run.tenantId(), tenantKey);
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", "Unknown runId: " + runId));
+            }
             return ResponseEntity.ok(toStatusResponse(run));
         } catch (IllegalArgumentException ex) {
             return ResponseEntity.badRequest().body(Map.of("error", "Invalid runId format"));

@@ -10,7 +10,7 @@ import java.util.Map;
  */
 public class ChartSpec {
 
-    public enum ChartType { BAR, HBAR, LINE, DONUT, HISTOGRAM, GROUPED_BAR, CORRELATION }
+    public enum ChartType { BAR, HBAR, LINE, DONUT, HISTOGRAM, GROUPED_BAR, CORRELATION, PARETO }
 
     private ChartType type;
     private String title;

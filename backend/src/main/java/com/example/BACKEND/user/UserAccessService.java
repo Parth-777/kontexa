@@ -65,9 +65,27 @@ public class UserAccessService {
     }
 
     public void createUser(String tenantId, String userId, String password, String position, boolean active) {
-        String sql = "INSERT INTO public.app_users (tenant_id, user_id, password_hash, position, is_active) "
-                + "VALUES (?, ?, ?, ?, ?)";
-        jdbcTemplate.update(sql, tenantId, userId, password, position, active);
+        java.util.UUID workspaceId = null;
+        try {
+            var ctx = com.example.BACKEND.tenancy.TenantContextHolder.get();
+            if (ctx != null) workspaceId = ctx.tenantId();
+        } catch (Exception ignored) {}
+
+        if (workspaceId != null) {
+            try {
+                jdbcTemplate.update(
+                        "INSERT INTO public.app_users (tenant_id, user_id, password_hash, position, is_active, workspace_id) "
+                                + "VALUES (?, ?, ?, ?, ?, ?)",
+                        tenantId, userId, password, position, active, workspaceId);
+                return;
+            } catch (Exception ignored) {
+                // workspace_id column may not exist pre Phase B migration
+            }
+        }
+        jdbcTemplate.update(
+                "INSERT INTO public.app_users (tenant_id, user_id, password_hash, position, is_active) "
+                        + "VALUES (?, ?, ?, ?, ?)",
+                tenantId, userId, password, position, active);
     }
 
     public void updateRole(String tenantId, String userId, String role) {

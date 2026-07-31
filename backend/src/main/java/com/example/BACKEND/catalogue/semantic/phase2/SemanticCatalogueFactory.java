@@ -3,6 +3,7 @@ package com.example.BACKEND.catalogue.semantic.phase2;
 import com.example.BACKEND.catalogue.decision.contracts.DecisionModels.DimensionDescriptor;
 import com.example.BACKEND.catalogue.decision.contracts.DecisionModels.MetricDescriptor;
 import com.example.BACKEND.catalogue.decision.contracts.DecisionModels.RegistryResolutionBundle;
+import com.example.BACKEND.catalogue.schema.NestedSchemaFieldGraph;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -40,13 +41,22 @@ public final class SemanticCatalogueFactory {
                 if (agg == null || "NONE".equalsIgnoreCase(agg)) {
                     agg = defaultAggFromBundle(bundle, name);
                 }
+                boolean container = col.path("container").asBoolean(false)
+                        || NestedSchemaFieldGraph.ROLE_CONTAINER.equalsIgnoreCase(role)
+                        || NestedSchemaFieldGraph.isNestedContainerType(col.path("dataType").asText(""));
+                String parentPath = col.path("parentPath").asText(null);
+                if (parentPath == null || parentPath.isBlank()) {
+                    parentPath = NestedSchemaFieldGraph.parentPath(name);
+                }
                 cols.add(new ApprovedCatalogueSnapshot.CatalogueColumn(
                         name,
                         role,
                         col.path("dataType").asText("VARCHAR"),
                         description,
                         agg,
-                        parseSampleValues(col.path("sampleValues").asText("[]"))));
+                        parseSampleValues(col.path("sampleValues").asText("[]")),
+                        container,
+                        parentPath));
             }
         }
 
@@ -60,13 +70,15 @@ public final class SemanticCatalogueFactory {
     public static SchemaSnapshot schemaFrom(RegistryResolutionBundle bundle) {
         String tableRef = tableRef(bundle);
         List<SchemaSnapshot.SchemaColumn> cols = new ArrayList<>();
+        // Use registry keys (catalogue leaf paths), never expressionTemplate SQL like SUM(table.col).
         for (MetricDescriptor m : bundle.metrics()) {
             cols.add(new SchemaSnapshot.SchemaColumn(
-                    bareColumn(m.expressionTemplate()), m.valueType()));
+                    resolveFieldPath(m.key(), tableRef), m.valueType()));
         }
         for (DimensionDescriptor d : bundle.dimensions()) {
             cols.add(new SchemaSnapshot.SchemaColumn(
-                    bareColumn(d.expression()), mapDimensionType(d.type())));
+                    resolveFieldPath(d.key() != null ? d.key() : d.expression(), tableRef),
+                    mapDimensionType(d.type())));
         }
         return new SchemaSnapshot(tableRef, List.copyOf(cols));
     }
@@ -74,14 +86,15 @@ public final class SemanticCatalogueFactory {
     private static List<ApprovedCatalogueSnapshot.CatalogueColumn> columnsFromBundle(
             RegistryResolutionBundle bundle
     ) {
+        String tableRef = tableRef(bundle);
         List<ApprovedCatalogueSnapshot.CatalogueColumn> cols = new ArrayList<>();
         for (MetricDescriptor m : bundle.metrics()) {
-            String col = bareColumn(m.expressionTemplate());
+            String col = resolveFieldPath(m.key(), tableRef);
             cols.add(new ApprovedCatalogueSnapshot.CatalogueColumn(
                     col, "metric", m.valueType(), null, m.aggregation(), List.of()));
         }
         for (DimensionDescriptor d : bundle.dimensions()) {
-            String col = bareColumn(d.expression());
+            String col = resolveFieldPath(d.key() != null ? d.key() : d.expression(), tableRef);
             cols.add(new ApprovedCatalogueSnapshot.CatalogueColumn(
                     col, mapRole(d.type()), mapDimensionType(d.type()), null, null, List.of()));
         }
@@ -112,20 +125,40 @@ public final class SemanticCatalogueFactory {
             return bundle.entities().getFirst().tableRef();
         }
         if (bundle.metrics() != null && !bundle.metrics().isEmpty()) {
-            return bareColumn(bundle.metrics().getFirst().expressionTemplate());
+            String key = bundle.metrics().getFirst().key();
+            if (key != null && key.contains(".")) {
+                return key.substring(0, key.indexOf('.'));
+            }
         }
         return "unknown";
     }
 
-    private static String bareColumn(String expression) {
-        if (expression == null) return "";
-        int dot = expression.lastIndexOf('.');
-        return dot >= 0 ? expression.substring(dot + 1) : expression;
+    /**
+     * Strips a leading {@code tableRef.} prefix when present; preserves nested field paths.
+     */
+    static String resolveFieldPath(String expression, String tableRef) {
+        if (expression == null || expression.isBlank()) {
+            return "";
+        }
+        String trimmed = expression.trim();
+        if (tableRef != null && !tableRef.isBlank()) {
+            String prefix = tableRef + ".";
+            if (trimmed.regionMatches(true, 0, prefix, 0, prefix.length())) {
+                return trimmed.substring(prefix.length());
+            }
+        }
+        int dot = trimmed.indexOf('.');
+        if (dot > 0 && tableRef != null && !tableRef.isBlank()
+                && trimmed.substring(0, dot).equalsIgnoreCase(tableRef)) {
+            return trimmed.substring(dot + 1);
+        }
+        return trimmed;
     }
 
     private static String defaultAggFromBundle(RegistryResolutionBundle bundle, String column) {
+        String tableRef = tableRef(bundle);
         return bundle.metrics().stream()
-                .filter(m -> bareColumn(m.expressionTemplate()).equalsIgnoreCase(column))
+                .filter(m -> resolveFieldPath(m.key(), tableRef).equalsIgnoreCase(column))
                 .map(MetricDescriptor::aggregation)
                 .findFirst()
                 .orElse("SUM");

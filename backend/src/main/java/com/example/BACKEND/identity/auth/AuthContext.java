@@ -22,4 +22,14 @@ public record AuthContext(
     public boolean hasWorkspace() {
         return workspaceId != null;
     }
+
+    /** Canonical tenant id (UUID). Same as {@link #workspaceId()}. */
+    public UUID tenantId() {
+        return workspaceId;
+    }
+
+    /** Canonical user id (UUID). Same as {@link #identityId()}. */
+    public UUID userId() {
+        return identityId;
+    }
 }

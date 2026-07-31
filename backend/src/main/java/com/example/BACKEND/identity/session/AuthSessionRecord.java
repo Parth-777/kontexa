@@ -17,4 +17,14 @@ public record AuthSessionRecord(
         LocalDateTime refreshExpiresAt,
         LocalDateTime revokedAt,
         LocalDateTime lastUsedAt
-) {}
+) {
+    /** Session user id (identity). */
+    public UUID userId() {
+        return identityId;
+    }
+
+    /** Session tenant id (active workspace). */
+    public UUID tenantId() {
+        return activeWorkspaceId;
+    }
+}

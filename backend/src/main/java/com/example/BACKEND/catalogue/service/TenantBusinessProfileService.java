@@ -47,6 +47,11 @@ public class TenantBusinessProfileService {
                 .orElseGet(TenantBusinessProfileEntity::new);
 
         profile.setClientId(clientId);
+        if (catalogue.getTenantId() != null) {
+            profile.setTenantId(catalogue.getTenantId());
+        } else {
+            com.example.BACKEND.tenancy.TenantIdBinder.bind(profile::setTenantId);
+        }
         profile.setUpdatedAt(LocalDateTime.now());
 
         String schema = catalogue.getSchemaName() != null

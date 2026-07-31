@@ -22,6 +22,9 @@ public class DailyMetricRollupEntity {
     @Column(name = "client_id", nullable = false)
     private String clientId;
 
+    @Column(name = "tenant_id")
+    private UUID tenantId;
+
     @Column(name = "table_name", nullable = false)
     private String tableName;
 
@@ -51,6 +54,9 @@ public class DailyMetricRollupEntity {
 
     public String getClientId() { return clientId; }
     public void setClientId(String clientId) { this.clientId = clientId; }
+
+    public UUID getTenantId() { return tenantId; }
+    public void setTenantId(UUID tenantId) { this.tenantId = tenantId; }
 
     public String getTableName() { return tableName; }
     public void setTableName(String tableName) { this.tableName = tableName; }

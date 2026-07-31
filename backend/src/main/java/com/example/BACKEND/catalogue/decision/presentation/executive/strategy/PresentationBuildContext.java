@@ -4,11 +4,13 @@ import com.example.BACKEND.catalogue.decision.presentation.executive.ExecutivePr
 import com.example.BACKEND.catalogue.decision.presentation.executive.ExecutivePresentationProperties;
 import com.example.BACKEND.catalogue.decision.presentation.executive.PresentationValueSanitizer;
 import com.example.BACKEND.catalogue.decision.presentation.executive.SemanticMetricFormatter;
+import com.example.BACKEND.catalogue.schema.SqlFieldReferenceEmitter;
 import com.example.BACKEND.catalogue.semantic.canonical.CanonicalQueryModel;
 
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -266,6 +268,61 @@ public final class PresentationBuildContext {
                 "");
     }
 
+    /**
+     * Projects warehouse SELECT aliases onto CanonicalQueryModel semantic column paths.
+     *
+     * <p>The SQL renderer emits nested catalogue leaves as last-segment aliases
+     * ({@code totals.visits → visits}, {@code trafficSource.source → source}). Presentation,
+     * statistics, and charts all look up CQM paths — this alignment is the single remapping
+     * after warehouse execution so every artifact shares one analytical key space.
+     */
+    public static List<Map<String, Object>> alignWarehouseKeysToCanonical(
+            CanonicalQueryModel model,
+            List<Map<String, Object>> rows
+    ) {
+        if (rows == null || rows.isEmpty() || model == null) {
+            return rows == null ? List.of() : rows;
+        }
+        Set<String> semanticColumns = new LinkedHashSet<>();
+        if (model.measure() != null && model.measure().column() != null) {
+            semanticColumns.add(model.measure().column());
+        }
+        if (model.partition() != null && model.partition().column() != null) {
+            semanticColumns.add(model.partition().column());
+        }
+        if (model.ratio() != null && model.ratio().denominator() != null
+                && model.ratio().denominator().column() != null) {
+            semanticColumns.add(model.ratio().denominator().column());
+        }
+        if (model.ordering() != null && model.ordering().column() != null) {
+            semanticColumns.add(model.ordering().column());
+        }
+        if (model.metadata() != null && model.metadata().secondaryMetric() != null) {
+            semanticColumns.add(model.metadata().secondaryMetric());
+        }
+        if (model.bivariate() != null) {
+            if (model.bivariate().columnA() != null) {
+                semanticColumns.add(model.bivariate().columnA());
+            }
+            if (model.bivariate().columnB() != null) {
+                semanticColumns.add(model.bivariate().columnB());
+            }
+        }
+        if (semanticColumns.isEmpty()) {
+            return rows;
+        }
+
+        List<Map<String, Object>> aligned = new ArrayList<>(rows.size());
+        for (Map<String, Object> row : rows) {
+            Map<String, Object> copy = new LinkedHashMap<>(row);
+            for (String semantic : semanticColumns) {
+                projectAliasOntoSemantic(copy, semantic);
+            }
+            aligned.add(copy);
+        }
+        return aligned;
+    }
+
     public static String findColumnKey(Map<String, Object> row, String column) {
         if (column == null || row == null) {
             return column;
@@ -278,7 +335,62 @@ public final class PresentationBuildContext {
                 return key;
             }
         }
+        // SQL renderer aliases nested paths to the last segment (visits for totals.visits).
+        String alias = sqlAlias(column);
+        if (alias != null && !alias.equals(column)) {
+            if (row.containsKey(alias)) {
+                return alias;
+            }
+            for (String key : row.keySet()) {
+                if (key.equalsIgnoreCase(alias)) {
+                    return key;
+                }
+            }
+        }
         return column;
+    }
+
+    private static void projectAliasOntoSemantic(Map<String, Object> row, String semantic) {
+        if (semantic == null || semantic.isBlank()) {
+            return;
+        }
+        if (row.containsKey(semantic)) {
+            return;
+        }
+        for (String key : row.keySet()) {
+            if (key.equalsIgnoreCase(semantic)) {
+                row.put(semantic, row.get(key));
+                return;
+            }
+        }
+        String alias = sqlAlias(semantic);
+        if (alias == null || alias.equals(semantic)) {
+            return;
+        }
+        if (row.containsKey(alias)) {
+            row.put(semantic, row.get(alias));
+            return;
+        }
+        for (String key : row.keySet()) {
+            if (key.equalsIgnoreCase(alias)) {
+                row.put(semantic, row.get(key));
+                return;
+            }
+        }
+    }
+
+    private static String sqlAlias(String column) {
+        if (column == null || column.isBlank() || !column.contains(".")) {
+            return column;
+        }
+        try {
+            return SqlFieldReferenceEmitter.emitAlias(column);
+        } catch (IllegalArgumentException ignored) {
+            int dot = column.lastIndexOf('.');
+            return dot >= 0 && dot < column.length() - 1
+                    ? column.substring(dot + 1)
+                    : column;
+        }
     }
 
     public ExecutivePresentation.PresentationSummary summary(
@@ -313,8 +425,12 @@ public final class PresentationBuildContext {
     }
 
     private static boolean columnExists(List<Map<String, Object>> rows, String column) {
-        return column != null && !column.isBlank() && rows != null && !rows.isEmpty()
-                && rows.getFirst().containsKey(column);
+        if (column == null || column.isBlank() || rows == null || rows.isEmpty()) {
+            return false;
+        }
+        Map<String, Object> row = rows.getFirst();
+        String resolved = findColumnKey(row, column);
+        return resolved != null && row.containsKey(resolved);
     }
 
     private static boolean isNumericColumn(List<Map<String, Object>> rows, String key) {

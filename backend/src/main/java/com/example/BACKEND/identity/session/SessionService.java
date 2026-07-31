@@ -142,13 +142,33 @@ public class SessionService {
 
     private Optional<AuthContext> toAuthContext(AuthSessionRecord session) {
         Optional<Identity> identityOpt = identities.findIdentityById(session.identityId());
-        if (identityOpt.isEmpty()) return Optional.empty();
+        if (identityOpt.isEmpty()) {
+            return Optional.empty();
+        }
 
         Identity identity = identityOpt.get();
+        if (identity.status() != null
+                && !"ACTIVE".equalsIgnoreCase(identity.status())
+                && !"INVITED".equalsIgnoreCase(identity.status())) {
+            // Suspended / revoked identities cannot form a TenantContext.
+            return Optional.empty();
+        }
+
         Optional<Workspace> workspaceOpt = identities.findWorkspaceById(session.activeWorkspaceId());
-        String slug = workspaceOpt.map(Workspace::slug).orElse("");
-        String role = identities.findRoleForIdentityInWorkspace(session.activeWorkspaceId(), identity.id())
-                .orElse("VIEWER");
+        if (workspaceOpt.isEmpty()) {
+            return Optional.empty();
+        }
+        Workspace workspace = workspaceOpt.get();
+        if (workspace.status() == null || !"ACTIVE".equalsIgnoreCase(workspace.status())) {
+            return Optional.empty();
+        }
+
+        Optional<String> roleOpt = identities.findRoleForIdentityInWorkspace(
+                session.activeWorkspaceId(), identity.id());
+        if (roleOpt.isEmpty()) {
+            // No membership in the session tenant → cannot resolve TenantContext.
+            return Optional.empty();
+        }
 
         sessions.touchSession(session.id());
 
@@ -156,10 +176,10 @@ public class SessionService {
                 session.id(),
                 identity.id(),
                 session.activeWorkspaceId(),
-                slug,
+                workspace.slug() != null ? workspace.slug() : "",
                 identity.email(),
                 identity.displayName() != null ? identity.displayName() : identity.email(),
-                role,
+                roleOpt.get(),
                 "IDENTITY_V2"
         ));
     }

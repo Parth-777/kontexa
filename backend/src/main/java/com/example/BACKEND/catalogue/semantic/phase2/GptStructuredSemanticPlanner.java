@@ -8,7 +8,8 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Calls GPT and parses a {@link StructuredSemanticPlan}.
@@ -42,7 +43,12 @@ public class GptStructuredSemanticPlanner {
                 question, raw);
         try {
             JsonNode root = mapper.readTree(raw);
+            String rawMetric = textOrNull(root, "metric");
+            log.info("[planner-pipeline-trace] stage=metric_before_bind question={} metric={}",
+                    question, rawMetric);
             StructuredSemanticPlan plan = parsePlan(root, catalogue);
+            log.info("[planner-pipeline-trace] stage=metric_after_bind question={} metric={}",
+                    question, plan.metric());
             log.info("[planner-pipeline-trace] stage=structured_semantic_plan question={} payload={}",
                     question, mapper.writeValueAsString(plan));
             return plan;
@@ -104,7 +110,11 @@ public class GptStructuredSemanticPlanner {
                 node.path("reasoning").asText(""),
                 List.copyOf(alternatives),
                 executionMode,
-                investigationDirection);
+                investigationDirection,
+                node.path("investigation_objective").isMissingNode()
+                        ? null : node.path("investigation_objective"),
+                node.path("investigation_plan").isMissingNode()
+                        ? null : node.path("investigation_plan"));
     }
 
     private static List<StructuredSemanticPlan.SemanticFilter> readFilters(
@@ -140,17 +150,61 @@ public class GptStructuredSemanticPlanner {
     }
 
     private static String bindColumn(ApprovedCatalogueSnapshot catalogue, String col, boolean metricOk) {
-        if (col == null || col.isBlank()) return null;
-        if (!catalogue.hasColumn(col)) return null;
+        if (col == null || col.isBlank()) {
+            logBindFailure(col, "blank_or_null");
+            return null;
+        }
+        if (!catalogue.hasColumn(col)) {
+            String reason = diagnoseMissingColumn(catalogue, col);
+            logBindFailure(col, reason);
+            return null;
+        }
+        if (!catalogue.isBindableLeaf(col)) {
+            logBindFailure(col, "not_bindable_leaf (container/parent path)");
+            return null;
+        }
         if (metricOk && catalogue.metricColumns().stream().noneMatch(m -> m.equalsIgnoreCase(col))
                 && catalogue.dimensionColumns().stream().noneMatch(d -> d.equalsIgnoreCase(col))) {
-            return catalogue.hasColumn(col) ? col : null;
+            String bound = catalogue.isBindableLeaf(col) ? catalogue.canonicalColumnName(col) : null;
+            if (bound == null) {
+                logBindFailure(col, "leaf_not_in_metric_or_dimension_role_lists");
+            }
+            return bound;
         }
-        return catalogue.columns().stream()
-                .map(ApprovedCatalogueSnapshot.CatalogueColumn::columnName)
-                .filter(name -> name.equalsIgnoreCase(col))
-                .findFirst()
-                .orElse(null);
+        return catalogue.canonicalColumnName(col);
+    }
+
+    private static void logBindFailure(String col, String reason) {
+        log.info("[planner-pipeline-trace] stage=bindColumn_failed raw={} reason={}", col, reason);
+    }
+
+    private static String diagnoseMissingColumn(ApprovedCatalogueSnapshot catalogue, String col) {
+        String trimmed = col == null ? "" : col.trim();
+        if (trimmed.matches("(?i)^[A-Z_]+\\(.+\\)$")) {
+            return "wrapper_expression_not_catalogue_leaf (e.g. SUM(...)/COUNT(...)); exact path required";
+        }
+        int dot = trimmed.indexOf('.');
+        if (dot > 0) {
+            String maybeTableQualified = trimmed.substring(dot + 1);
+            if (catalogue.hasColumn(maybeTableQualified)) {
+                return "table_qualified_path_mismatch; catalogue leaf is '" + maybeTableQualified
+                        + "' but GPT returned '" + trimmed + "'";
+            }
+        }
+        // Strip SUM(table.col) / SUM(col) shapes for clearer diagnostics
+        Matcher m = Pattern.compile("(?i)^([A-Z_]+)\\((.+)\\)$").matcher(trimmed);
+        if (m.matches()) {
+            String inner = m.group(2).trim();
+            int innerDot = inner.indexOf('.');
+            String innerLeaf = innerDot > 0 ? inner.substring(innerDot + 1) : inner;
+            if (catalogue.hasColumn(inner) || catalogue.hasColumn(innerLeaf)) {
+                return "wrapper_expression_not_catalogue_leaf; inner path exists as '"
+                        + (catalogue.hasColumn(inner) ? inner : innerLeaf)
+                        + "' but GPT returned '" + trimmed + "'";
+            }
+            return "wrapper_expression_not_catalogue_leaf; GPT returned '" + trimmed + "'";
+        }
+        return "exact_string_mismatch; no catalogue column named '" + trimmed + "'";
     }
 
     private static String textOrNull(JsonNode node, String field) {

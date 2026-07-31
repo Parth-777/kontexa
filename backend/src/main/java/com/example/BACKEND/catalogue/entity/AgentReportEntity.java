@@ -15,6 +15,9 @@ public class AgentReportEntity {
     @Column(name = "client_id", nullable = false)
     private String clientId;
 
+    @Column(name = "tenant_id")
+    private UUID tenantId;
+
     @Column(name = "period_type", nullable = false)
     private String periodType;   // WEEKLY | MONTHLY
 
@@ -33,6 +36,8 @@ public class AgentReportEntity {
     public UUID getId()                          { return id; }
     public String getClientId()                  { return clientId; }
     public void setClientId(String v)            { this.clientId = v; }
+    public UUID getTenantId()                    { return tenantId; }
+    public void setTenantId(UUID v)              { this.tenantId = v; }
     public String getPeriodType()                { return periodType; }
     public void setPeriodType(String v)          { this.periodType = v; }
     public String getPeriodLabel()               { return periodLabel; }

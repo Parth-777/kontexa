@@ -117,6 +117,10 @@ public final class GptStructuredPlannerPrompt {
                 
                 If the question requests a single business value, do not introduce a grouping dimension.
                 
+                For nested warehouse schemas, always bind the full leaf path exactly as listed in the
+                catalogue (for example trafficSource.source or geoNetwork.country). Never bind RECORD,
+                STRUCT, or OBJECT parent fields as dimensions.
+                
                 =========================================================
                 METRIC SELECTION
                 =========================================================
@@ -128,6 +132,29 @@ public final class GptStructuredPlannerPrompt {
                 Every selected metric must have a direct analytical purpose.
                 
                 Prefer the simplest semantic plan that completely answers the business question.
+                
+                CRITICAL — semantic identifiers, not SQL:
+                
+                - metric, secondary_metric, relationship_variable, dimensions[], filters[].column,
+                  ordering.column, and every investigation measure/dimension/x/y/column/time_column
+                  MUST be an exact catalogue leaf path copied from the CATALOGUE list
+                  (for example totals.visits or trafficSource.source).
+                
+                - NEVER wrap a metric in SQL (forbidden: SUM(...), COUNT(...), AVG(...)).
+                
+                - NEVER qualify a leaf with a table or dataset name
+                  (forbidden: ga_sessions_20160801.totals.visits).
+                
+                - Aggregation belongs ONLY in aggregations.primary / aggregations.secondary
+                  (and investigation measure.aggregation). Never inside the metric string.
+                
+                Correct:
+                  "metric": "totals.visits",
+                  "aggregations": { "primary": "SUM", "secondary": null }
+                
+                Incorrect:
+                  "metric": "SUM(ga_sessions_20160801.totals.visits)"
+                  "aggregations": { "primary": "SUM(ga_sessions_20160801.totals.visits)", ... }
                 
                 =========================================================
                 RELATIONSHIPS
@@ -166,6 +193,9 @@ public final class GptStructuredPlannerPrompt {
                 
                 Do not introduce ordering otherwise.
                 
+                ordering.column must be a catalogue leaf path (usually the same leaf as metric),
+                never a SQL expression and never a table-qualified name.
+                
                 =========================================================
                 LIMIT
                 =========================================================
@@ -191,7 +221,12 @@ public final class GptStructuredPlannerPrompt {
                 
                 Always populate aggregations.primary for the primary metric.
                 
-                Use the catalogue default_aggregation when present.
+                aggregations.primary and aggregations.secondary must be exactly one of:
+                SUM, COUNT, AVG, or null.
+                
+                Never put column paths or SQL text in aggregations.*.
+                
+                Use the catalogue default_aggregation when present and it is SUM, COUNT, or AVG.
                 
                 Use SUM for additive business quantities (revenue, cost, count, amount).
                 
@@ -207,21 +242,137 @@ public final class GptStructuredPlannerPrompt {
                 
                 Every plan must declare an execution_mode that reflects the user's analytical objective. Decide it from the objective, never from specific words or phrases.
                 
-                - CANONICAL: the question is answered by retrieving, aggregating, segmenting, ranking, comparing, or describing values. The answer IS the data — for example a single total, a breakdown across segments, a ranking, a contribution share, or a time series. No causal explanation is required.
+                - CANONICAL: the question is answered by a single retrieval/aggregation result. The answer IS that result. Typical: "What is total revenue?", "Show trips by payment type."
                 
-                - INVESTIGATION: the question asks you to explain the CAUSE of a change or outcome in a metric. Answering correctly requires decomposing a metric's movement into the drivers that produced it. The answer is an evidence-grounded explanation of why the metric moved, not a single retrieval.
+                - INVESTIGATION: answering requires composing one or more warehouse evidence requests into an EvidencePack (influence, why/contrast, contribution ranking with share, concentration, change over time with supporting context, multi-slice comparison). Do not invent investigation categories — only decide what evidence is required.
                 
                 Apply this test:
                 
-                - If the objective is descriptive or retrieval (what is the value, how is it distributed, which segment ranks highest, how much does a segment contribute) choose CANONICAL.
+                - If one warehouse retrieval is enough AND the answer is that retrieval alone, choose CANONICAL.
                 
-                - If the objective is causal or explanatory about why a metric increased, decreased, grew, declined, or changed, and which factors drove that movement, choose INVESTIGATION.
+                - If the answer needs an evidence program (even a single specialized kind such as correlation, concentration, or time_series, or multiple kinds together), choose INVESTIGATION and populate investigation_plan.
                 
-                When the objective is ambiguous, choose CANONICAL.
+                Prefer INVESTIGATION when the question asks how X influences Y, why A differs from B, who contributes most, whether value is concentrated, how a metric changed over time, or which segments generate the most — these need evidence_requests, not a lone canonical retrieval.
                 
-                When execution_mode is INVESTIGATION, set investigation_direction to the change the user is asking about: INCREASE, DECREASE, or ANY when the direction is unspecified. Otherwise set investigation_direction to null.
+                When execution_mode is INVESTIGATION:
+                - populate investigation_plan (required) — see INVESTIGATION PLAN section
+                - set investigation_objective to null (legacy compatibility field)
+                - set investigation_direction to INCREASE, DECREASE, or ANY when temporal direction applies; otherwise null
                 
-                execution_mode does not change how you select metrics, dimensions, filters, or aggregations. Continue to resolve the plan exactly as for any other question.
+                When execution_mode is CANONICAL, set investigation_plan and investigation_objective to null.
+                
+                execution_mode does not change how you select metrics, dimensions, filters, or aggregations for the canonical plan fields. Continue to resolve those exactly as for any other question.
+                
+                =========================================================
+                INVESTIGATION PLAN (required when execution_mode is INVESTIGATION)
+                =========================================================
+                
+                investigation_plan is the sole contract for the investigation runtime.
+                Ask: what warehouse evidence is required to answer, and what argument
+                structure does that evidence serve?
+                
+                The runtime executes ONLY evidence_requests (SQL kinds).
+                hypotheses, evidence_purpose, and insufficiency are planner metadata
+                for reasoning fidelity — they do not change SQL compilation.
+                
+                Structure:
+                - phenomenon: { subject, measure }
+                - scope: { filters: [...] } — shared scope for all requests
+                - hypotheses: [{ id, claim, status }] — may be []
+                - evidence_requests: [{ id, kind, role?, hypothesis_id?, evidence_purpose?, measure?, dimension?, x?, y?, column?, limit?, time_column?, time_grain?, side?, slice?, focal_slice?, baseline_slice?, params? }]
+                - insufficiency: { answerable, unknowns[], blocked_reasons[] }
+                - semantic_confidence: 0.0–1.0
+                
+                Each constraint in a slice (when a request has slice/focal_slice/baseline_slice) is exactly one of:
+                - { filter: { column, operator, value } }
+                - { time_range: { column, start, end } } — half-open [start, end)
+                - { rank: { column, side (LOWER|UPPER), fraction, grain (optional) } }
+                - { population: true } — the scoped universe with no additional bound
+                
+                Supported evidence_requests.kind values (warehouse retrieval primitives ONLY):
+                - slice_metric
+                - metric_by_dimension
+                - distribution
+                - correlation
+                - rank
+                - top_n
+                - bottom_n
+                - share
+                - concentration
+                - time_series
+                
+                Compose any mixture of these kinds in one plan. Do not emit investigation categories, investigation types, playbooks, or question-type labels.
+                
+                ---------------------------------------------------------
+                HYPOTHESES (for WHY / EXPLAIN / INVESTIGATE)
+                ---------------------------------------------------------
+                When the question asks why / explain / investigate a difference or pattern:
+                - Emit 2–5 competing hypotheses grounded in catalogue-available concepts.
+                - Each hypothesis.id is stable (H1, H2, …).
+                - claim is a testable statement (not a question category label).
+                - status:
+                  - PRIMARY — leading candidate before execution
+                  - ALTERNATIVE — competing candidate
+                  - REJECTED_CANDIDATE — considered but not testable with this catalogue
+                - Do NOT invent metrics/dimensions absent from the catalogue.
+                - If the question is a single retrieval shape (e. g. pure concentration), hypotheses may be [].
+                
+                ---------------------------------------------------------
+                EVIDENCE PURPOSE (why each request exists)
+                ---------------------------------------------------------
+                Every evidence_request SHOULD set evidence_purpose:
+                - PRIMARY — directly tests a hypothesis claim
+                - VALIDATION — corroborates a PRIMARY result with a related kind
+                - COMPARISON — establishes the phenomenon gap (e.g. FOCAL vs BASELINE)
+                - CONTRADICTION — evidence that would weaken/falsify a hypothesis
+                - CONTEXT — background distribution / scope without deciding the claim
+                
+                Link requests to hypotheses via hypothesis_id when they test a claim.
+                COMPARISON / CONTEXT may use hypothesis_id = null.
+                
+                role FOCAL and BASELINE remains for paired slice contrasts.
+                evidence_purpose is orthogonal to role:
+                  FOCAL/BASELINE slice_metric pair → usually evidence_purpose=COMPARISON
+                
+                ---------------------------------------------------------
+                INSUFFICIENCY (planner honesty BEFORE execution)
+                ---------------------------------------------------------
+                Declare what the catalogue cannot support:
+                - answerable=true — evidence_requests are sufficient for a grounded answer
+                  (unknowns may still list partial gaps)
+                - answerable=false — cannot close the causal/explanatory claim;
+                  still emit any executable requests that bound the problem;
+                  list unknowns and blocked_reasons honestly
+                
+                unknowns / blocked_reasons must be catalogue-grounded
+                (e.g. "marketing spend unavailable"), never invented warehouse facts.
+                When fully answerable with no gaps, use:
+                  { "answerable": true, "unknowns": [], "blocked_reasons": [] }
+                
+                Evidence composition guidance (kinds only — not categories):
+                - Influence / relationship (e.g. how trip distance influences total amount): ALWAYS emit at least correlation plus one of distribution or metric_by_dimension (prefer both). Never emit correlation alone.
+                - Why A vs B (e.g. payment type 1 tips more than type 2): emit two slice_metric requests with role FOCAL and BASELINE (filters on each request's slice only). Prefer slice_metric over metric_by_dimension for paired contrasts. Leave focal_slice/baseline_slice empty on metric_by_dimension unless you intentionally need contrast columns in one query. For WHY/EXPLAIN also emit hypotheses + PRIMARY/VALIDATION/CONTRADICTION evidence linked by hypothesis_id.
+                - Who contributes most: emit top_n or rank AND share together.
+                - Change over time: emit time_series (set time_column + time_grain). Add supporting slice_metric if helpful.
+                - Which segments/regions generate most: ALWAYS INVESTIGATION — emit rank or top_n (dimension=region or segment column). Do not use CANONICAL for "which X generate highest Y".
+                - Is value concentrated: ALWAYS emit concentration (kind=concentration). Optionally add share or top_n alongside — never substitute top_n alone for concentration questions.
+                
+                Concrete evidence programs (illustrative — adapt columns to catalogue):
+                - "How does trip distance influence total amount?" → INVESTIGATION: correlation(x=trip_distance,y=total_amount) + distribution(dimension=trip_distance) + metric_by_dimension(dimension=payment_type or similar, measure=total_amount)
+                - "Why do payment type 1 users tip more than payment type 2?" → INVESTIGATION: hypotheses + slice_metric FOCAL/BASELINE (COMPARISON) + supporting PRIMARY/VALIDATION requests linked to hypotheses
+                - "Why is desktop traffic higher than mobile?" → INVESTIGATION: competing hypotheses (e.g. organic favors desktop; direct dominates; engagement) + COMPARISON FOCAL/BASELINE by device + PRIMARY/VALIDATION/CONTRADICTION requests per testable hypothesis; declare unknowns such as marketing spend if absent
+                - "Which customers contribute most revenue?" → INVESTIGATION: top_n(customer_id,total_amount) + share(customer_id,total_amount)
+                - "How has revenue changed over time?" → INVESTIGATION: time_series(total_amount, time_column, MONTH)
+                - "Which regions generate the highest revenue?" → INVESTIGATION: rank or top_n(region,total_amount)
+                - "Is revenue concentrated among a few customers?" → INVESTIGATION: concentration(customer_id,total_amount) [+ optional share]
+                
+                Use role FOCAL and BASELINE on paired slice_metric requests when contrasting two slices.
+                For correlation set x and y (or dimension + measure).
+                For time_series set time_column and time_grain (DAY|WEEK|MONTH|QUARTER|YEAR).
+                For rank/top_n/bottom_n/share/concentration set dimension, measure, and optional limit.
+                For metric_by_dimension set dimension + measure; do not put contrast filters into focal_slice/baseline_slice unless both sides are required in one SQL.
+                Prefer empty slice constraints over inventing IS NOT NULL filters.
+                Prefer catalogue columns that exist; for location/region questions use the best available location dimension (for example PULocationID when region is absent). Do not invent customer_id when the catalogue has no customer identifier — use the closest entity dimension present, or lower confidence.
                 
                 =========================================================
                 ANALYTICAL INTENT MAPPING
@@ -278,6 +429,8 @@ public final class GptStructuredPlannerPrompt {
                 
                 Do not generate SQL.
                 
+                Do not embed SQL fragments inside JSON string fields.
+                
                 Do not answer the user's question.
                 
                 Do not include commentary.
@@ -295,6 +448,9 @@ public final class GptStructuredPlannerPrompt {
         sb.append("QUESTION:\n").append(question).append("\n\n");
         sb.append("CATALOGUE (table=").append(catalogue.tableRef()).append("):\n");
         for (ApprovedCatalogueSnapshot.CatalogueColumn c : catalogue.columns()) {
+            if (catalogue.isContainer(c.columnName())) {
+                continue;
+            }
             sb.append("- {\"column\":\"").append(c.columnName()).append("\"");
             sb.append(",\"role\":\"").append(c.role()).append("\"");
             if (c.description() != null && !c.description().isBlank()) {
@@ -358,8 +514,14 @@ public final class GptStructuredPlannerPrompt {
                           "type": "object",
                           "additionalProperties": false,
                           "properties": {
-                            "primary": { "type": ["string","null"] },
-                            "secondary": { "type": ["string","null"] }
+                            "primary": {
+                              "type": ["string","null"],
+                              "enum": ["SUM","COUNT","AVG",null]
+                            },
+                            "secondary": {
+                              "type": ["string","null"],
+                              "enum": ["SUM","COUNT","AVG",null]
+                            }
                           },
                           "required": ["primary","secondary"]
                         },
@@ -380,6 +542,194 @@ public final class GptStructuredPlannerPrompt {
                         },
                         "confidence": { "type": "number" },
                         "reasoning": { "type": "string" },
+                        "investigation_plan": {
+                          "type": ["object","null"],
+                          "additionalProperties": false,
+                          "properties": {
+                            "phenomenon": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "subject": { "type": ["string","null"] },
+                                "measure": {
+                                  "type": ["object","null"],
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "column": { "type": "string" },
+                                    "aggregation": { "type": "string", "enum": ["SUM","COUNT","AVG"] },
+                                    "grain": { "type": "array", "items": { "type": "string" } }
+                                  },
+                                  "required": ["column","aggregation","grain"]
+                                }
+                              },
+                              "required": ["subject","measure"]
+                            },
+                            "scope": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "filters": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "column": { "type": "string" },
+                                      "operator": { "type": "string" },
+                                      "value": { "type": "string" }
+                                    },
+                                    "required": ["column","operator","value"]
+                                  }
+                                }
+                              },
+                              "required": ["filters"]
+                            },
+                            "hypotheses": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "properties": {
+                                  "id": { "type": "string" },
+                                  "claim": { "type": "string" },
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["PRIMARY","ALTERNATIVE","REJECTED_CANDIDATE"]
+                                  }
+                                },
+                                "required": ["id","claim","status"]
+                              }
+                            },
+                            "evidence_requests": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "properties": {
+                                  "id": { "type": "string" },
+                                  "kind": { "type": "string" },
+                                  "role": { "type": ["string","null"] },
+                                  "hypothesis_id": { "type": ["string","null"] },
+                                  "evidence_purpose": {
+                                    "type": ["string","null"],
+                                    "enum": ["PRIMARY","VALIDATION","COMPARISON","CONTRADICTION","CONTEXT",null]
+                                  },
+                                  "measure": {
+                                    "type": ["object","null"],
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "column": { "type": "string" },
+                                      "aggregation": { "type": "string", "enum": ["SUM","COUNT","AVG"] },
+                                      "grain": { "type": "array", "items": { "type": "string" } }
+                                    },
+                                    "required": ["column","aggregation","grain"]
+                                  },
+                                  "dimension": { "type": ["string","null"] },
+                                  "x": { "type": ["string","null"] },
+                                  "y": { "type": ["string","null"] },
+                                  "column": { "type": ["string","null"] },
+                                  "limit": { "type": ["integer","null"] },
+                                  "time_column": { "type": ["string","null"] },
+                                  "time_grain": { "type": ["string","null"], "enum": ["DAY","WEEK","MONTH","QUARTER","YEAR",null] },
+                                  "side": { "type": ["string","null"], "enum": ["LOWER","UPPER",null] },
+                                  "slice": { "$ref": "#/$defs/investigation_slice" },
+                                  "focal_slice": { "$ref": "#/$defs/investigation_slice" },
+                                  "baseline_slice": { "$ref": "#/$defs/investigation_slice" },
+                                  "params": {
+                                    "type": ["object","null"],
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "limit": { "type": ["integer","null"] },
+                                      "time_column": { "type": ["string","null"] },
+                                      "time_grain": { "type": ["string","null"] },
+                                      "side": { "type": ["string","null"] }
+                                    },
+                                    "required": ["limit","time_column","time_grain","side"]
+                                  }
+                                },
+                                "required": ["id","kind","role","hypothesis_id","evidence_purpose","measure","dimension","x","y","column","limit","time_column","time_grain","side","slice","focal_slice","baseline_slice","params"]
+                              }
+                            },
+                            "insufficiency": {
+                              "type": ["object","null"],
+                              "additionalProperties": false,
+                              "properties": {
+                                "answerable": { "type": "boolean" },
+                                "unknowns": {
+                                  "type": "array",
+                                  "items": { "type": "string" }
+                                },
+                                "blocked_reasons": {
+                                  "type": "array",
+                                  "items": { "type": "string" }
+                                }
+                              },
+                              "required": ["answerable","unknowns","blocked_reasons"]
+                            },
+                            "semantic_confidence": { "type": "number" }
+                          },
+                          "required": ["phenomenon","scope","hypotheses","evidence_requests","insufficiency","semantic_confidence"]
+                        },
+                        "investigation_objective": {
+                          "type": ["object","null"],
+                          "additionalProperties": false,
+                          "properties": {
+                            "measure": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "column": { "type": "string" },
+                                "aggregation": { "type": "string", "enum": ["SUM","COUNT","AVG"] },
+                                "grain": { "type": "array", "items": { "type": "string" } }
+                              },
+                              "required": ["column","aggregation","grain"]
+                            },
+                            "scope": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "filters": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "column": { "type": "string" },
+                                      "operator": { "type": "string" },
+                                      "value": { "type": "string" }
+                                    },
+                                    "required": ["column","operator","value"]
+                                  }
+                                }
+                              },
+                              "required": ["filters"]
+                            },
+                            "comparison": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "focal": { "$ref": "#/$defs/investigation_slice" },
+                                "baseline": { "$ref": "#/$defs/investigation_slice" }
+                              },
+                              "required": ["focal","baseline"]
+                            },
+                            "decomposition": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "dimensions": { "type": "array", "items": { "type": "string" } },
+                                "exclude": { "type": "array", "items": { "type": "string" } }
+                              },
+                              "required": ["dimensions","exclude"]
+                            },
+                            "salience": {
+                              "type": "string",
+                              "enum": ["FOCAL_HIGHER","FOCAL_LOWER","DIFFERENCE"]
+                            },
+                            "semantic_confidence": { "type": "number" }
+                          },
+                          "required": ["measure","scope","comparison","decomposition","salience","semantic_confidence"]
+                        },
                         "alternatives": {
                           "type": "array",
                           "items": {
@@ -407,8 +757,14 @@ public final class GptStructuredPlannerPrompt {
                                 "type": "object",
                                 "additionalProperties": false,
                                 "properties": {
-                                  "primary": { "type": ["string","null"] },
-                                  "secondary": { "type": ["string","null"] }
+                                  "primary": {
+                                    "type": ["string","null"],
+                                    "enum": ["SUM","COUNT","AVG",null]
+                                  },
+                                  "secondary": {
+                                    "type": ["string","null"],
+                                    "enum": ["SUM","COUNT","AVG",null]
+                                  }
                                 },
                                 "required": ["primary","secondary"]
                               },
@@ -417,7 +773,7 @@ public final class GptStructuredPlannerPrompt {
                                 "additionalProperties": false,
                                 "properties": {
                                   "column": { "type": "string" },
-                                  "direction": { "type": "string" }
+                                  "direction": { "type": "string", "enum": ["ASC","DESC"] }
                                 },
                                 "required": ["column","direction"]
                               },
@@ -431,7 +787,58 @@ public final class GptStructuredPlannerPrompt {
                           }
                         }
                       },
-                      "required": ["execution_mode","investigation_direction","intent","metric","secondary_metric","dimensions","filters","aggregations","ordering","limit","relationship_variable","time_grain","confidence","reasoning","alternatives"]
+                      "required": ["execution_mode","investigation_direction","intent","metric","secondary_metric","dimensions","filters","aggregations","ordering","limit","relationship_variable","time_grain","confidence","reasoning","investigation_plan","investigation_objective","alternatives"],
+                      "$defs": {
+                        "investigation_slice": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "constraints": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "properties": {
+                                  "filter": {
+                                    "type": ["object","null"],
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "column": { "type": "string" },
+                                      "operator": { "type": "string" },
+                                      "value": { "type": "string" }
+                                    },
+                                    "required": ["column","operator","value"]
+                                  },
+                                  "time_range": {
+                                    "type": ["object","null"],
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "column": { "type": "string" },
+                                      "start": { "type": "string" },
+                                      "end": { "type": "string" }
+                                    },
+                                    "required": ["column","start","end"]
+                                  },
+                                  "rank": {
+                                    "type": ["object","null"],
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "column": { "type": "string" },
+                                      "side": { "type": "string", "enum": ["LOWER","UPPER"] },
+                                      "fraction": { "type": "number" },
+                                      "grain": { "type": "array", "items": { "type": "string" } }
+                                    },
+                                    "required": ["column","side","fraction","grain"]
+                                  },
+                                  "population": { "type": ["boolean","null"] }
+                                },
+                                "required": ["filter","time_range","rank","population"]
+                              }
+                            }
+                          },
+                          "required": ["constraints"]
+                        }
+                      }
                     }
                     """);
         } catch (Exception e) {

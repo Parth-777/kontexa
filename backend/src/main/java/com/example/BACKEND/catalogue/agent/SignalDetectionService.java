@@ -261,6 +261,7 @@ public class SignalDetectionService {
     ) {
         SignalEntity s = new SignalEntity();
         s.setClientId(clientId);
+        com.example.BACKEND.tenancy.TenantIdBinder.bind(s::setTenantId);
         s.setTableName(hints.tableName());
         s.setTableSchema(hints.tableSchema());
         s.setSignalType(signalType);

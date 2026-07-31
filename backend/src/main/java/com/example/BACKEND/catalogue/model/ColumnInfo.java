@@ -10,7 +10,8 @@ import java.util.Map;
  * Populated in three stages:
  *   Stage 1 (SchemaDiscoveryService)      → structure fields
  *   Stage 2 (DataSamplerService)          → sampleValues, min, max, avg
- *   Stage 3 (CatalogueEnrichmentService)  → description, synonyms, valueMeanings, role
+ *   Stage 3 (CatalogueEnrichmentService)  → description, synonyms, valueMeanings, role,
+ *                                           businessMeaning (rich semantic explanation)
  */
 public class ColumnInfo {
 
@@ -18,6 +19,12 @@ public class ColumnInfo {
     private String columnName;
     private String dataType;
     private boolean nullable;
+    /** True for RECORD/STRUCT/OBJECT parents — not bindable as dimensions. */
+    private boolean container;
+    /** Parent path for nested leaves, e.g. trafficSource for trafficSource.source */
+    private String parentPath;
+    /** Warehouse field mode: NULLABLE, REQUIRED, REPEATED, etc. */
+    private String fieldMode;
 
     // --- Stage 2: sampled data ---
     private List<String> sampleValues = new ArrayList<>();
@@ -28,14 +35,24 @@ public class ColumnInfo {
     private String skipReason;
 
     // --- Stage 3: LLM enrichment ---
-    // Plain English description of what this column represents
+    /** Short human-readable summary for admin UI / quick scan. */
     private String description;
-    // English words/phrases a non-technical user might say to refer to this column
+    /**
+     * Primary semantic knowledge for future GPT/Claude reasoning.
+     * Rich analyst-style explanation (what it stores, business meaning, when to use,
+     * aggregation, grain, caveats). Single source of truth for field meaning.
+     */
+    private String businessMeaning;
+    /** Optional weak hints only (prefer ≤3); never an exhaustive synonym dictionary. */
     private List<String> synonyms = new ArrayList<>();
     // Meanings of coded values e.g. {"IN" -> "India", "pending" -> "order not yet processed"}
     private Map<String, String> valueMeanings = new HashMap<>();
     // Role of this column in queries: dimension | metric | filter | timestamp | identifier
     private String role;
+    /** Optional generate-time aggregation hint; approve-time enricher may also set this. */
+    private String aggregationMethod;
+    /** 0–1 confidence in the semantic enrichment; null if unknown. */
+    private Double confidence;
     // Whether LLM enrichment ran on this column
     private boolean enriched = false;
 
@@ -55,6 +72,15 @@ public class ColumnInfo {
 
     public boolean isNullable() { return nullable; }
     public void setNullable(boolean nullable) { this.nullable = nullable; }
+
+    public boolean isContainer() { return container; }
+    public void setContainer(boolean container) { this.container = container; }
+
+    public String getParentPath() { return parentPath; }
+    public void setParentPath(String parentPath) { this.parentPath = parentPath; }
+
+    public String getFieldMode() { return fieldMode; }
+    public void setFieldMode(String fieldMode) { this.fieldMode = fieldMode; }
 
     public List<String> getSampleValues() { return sampleValues; }
     public void setSampleValues(List<String> sampleValues) { this.sampleValues = sampleValues; }
@@ -77,6 +103,9 @@ public class ColumnInfo {
     public String getDescription() { return description; }
     public void setDescription(String description) { this.description = description; }
 
+    public String getBusinessMeaning() { return businessMeaning; }
+    public void setBusinessMeaning(String businessMeaning) { this.businessMeaning = businessMeaning; }
+
     public List<String> getSynonyms() { return synonyms; }
     public void setSynonyms(List<String> synonyms) { this.synonyms = synonyms; }
 
@@ -85,6 +114,12 @@ public class ColumnInfo {
 
     public String getRole() { return role; }
     public void setRole(String role) { this.role = role; }
+
+    public String getAggregationMethod() { return aggregationMethod; }
+    public void setAggregationMethod(String aggregationMethod) { this.aggregationMethod = aggregationMethod; }
+
+    public Double getConfidence() { return confidence; }
+    public void setConfidence(Double confidence) { this.confidence = confidence; }
 
     public boolean isEnriched() { return enriched; }
     public void setEnriched(boolean enriched) { this.enriched = enriched; }

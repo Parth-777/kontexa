@@ -4,13 +4,14 @@ import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
 /**
- * Stores the entire approved catalogue as a single JSON blob.
+ * Stores a published projection of an approved catalogue as a JSON blob.
  *
  * Generated automatically when a catalogue is approved.
  * Used at query time — one fast read instead of joining 3 tables.
  *
- * One row per client (enforced by unique index on client_id).
- * Approving a new catalogue replaces the previous snapshot.
+ * Relational {@code client_catalogues} (+ columns) remain the versioned source of truth.
+ * This table currently holds one published snapshot per client (unique on client_id);
+ * future evolution can retain history without moving semantics out of relational rows.
  */
 @Entity
 @Table(name = "catalogue_snapshots")
@@ -26,6 +27,9 @@ public class CatalogueSnapshotEntity {
     @Column(name = "client_id", nullable = false, unique = true)
     private String clientId;
 
+    @Column(name = "tenant_id")
+    private java.util.UUID tenantId;
+
     /** The entire enriched catalogue serialized as a JSON string */
     @Column(name = "catalogue_json", nullable = false, columnDefinition = "TEXT")
     private String catalogueJson;
@@ -40,6 +44,8 @@ public class CatalogueSnapshotEntity {
     public void setCatalogueId(Long id)        { this.catalogueId = id; }
     public String getClientId()                { return clientId; }
     public void   setClientId(String s)        { this.clientId = s; }
+    public java.util.UUID getTenantId()        { return tenantId; }
+    public void setTenantId(java.util.UUID id) { this.tenantId = id; }
     public String getCatalogueJson()           { return catalogueJson; }
     public void   setCatalogueJson(String s)   { this.catalogueJson = s; }
     public LocalDateTime getCreatedAt()        { return createdAt; }

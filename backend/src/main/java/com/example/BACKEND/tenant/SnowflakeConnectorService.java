@@ -1,5 +1,7 @@
 package com.example.BACKEND.tenant;
 
+import com.example.BACKEND.catalogue.investigation.WarehouseRowNormalizer;
+
 import org.springframework.stereotype.Service;
 
 import java.sql.Connection;
@@ -189,11 +191,7 @@ public class SnowflakeConnectorService {
     }
 
     private Object normalizeValue(Object value) {
-        if (value == null) return null;
-        if (value instanceof java.sql.Date d)      return d.toLocalDate().toString();
-        if (value instanceof java.sql.Timestamp ts) return ts.toLocalDateTime().toString();
-        if (value instanceof java.sql.Time t)       return t.toLocalTime().toString();
-        return value;
+        return WarehouseRowNormalizer.normalizeValue(value);
     }
 
     private String require(String value, String field) {

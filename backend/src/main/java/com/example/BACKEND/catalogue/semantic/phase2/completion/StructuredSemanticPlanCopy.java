@@ -41,7 +41,8 @@ final class StructuredSemanticPlanCopy {
                 appendCompletionNote(plan.reasoning(), secondaryMetric),
                 plan.alternatives(),
                 plan.executionMode(),
-                plan.investigationDirection());
+                plan.investigationDirection(),
+                plan.investigationObjective());
     }
 
     private static String appendCompletionNote(String reasoning, String secondaryMetric) {

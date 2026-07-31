@@ -62,24 +62,24 @@ public final class ChartCardinalityReducer {
 
         // Trend / time-series: never truncate — always render the complete timeline.
         if (lineChart || "TREND".equals(type) || "GROWTH".equals(type)) {
-            return new Result(copy(source), total, total, 0, null);
+            return new Result(copy(source, categoryKey, valueKey), total, total, 0, null);
         }
 
         // Without a category + value key, or with no rows, there is nothing to reduce.
         if (categoryKey == null || categoryKey.isBlank()
                 || valueKey == null || valueKey.isBlank()
                 || total == 0) {
-            return new Result(copy(source), total, total, 0, null);
+            return new Result(copy(source, categoryKey, valueKey), total, total, 0, null);
         }
 
         List<Map<String, Object>> sorted = sortByValueDesc(source, valueKey);
 
         // Cardinality within budget: render every category.
         if (total <= topN) {
-            return new Result(copy(sorted), total, total, 0, null);
+            return new Result(copy(sorted, categoryKey, valueKey), total, total, 0, null);
         }
 
-        List<Map<String, Object>> top = copy(sorted.subList(0, topN));
+        List<Map<String, Object>> top = copy(sorted.subList(0, topN), categoryKey, valueKey);
         int aggregated = total - topN;
 
         // RANKING keeps the Top N only (no "Other" bucket).
@@ -123,12 +123,29 @@ public final class ChartCardinalityReducer {
         return sorted;
     }
 
-    private static List<Map<String, Object>> copy(List<Map<String, Object>> rows) {
+    private static List<Map<String, Object>> copy(
+            List<Map<String, Object>> rows,
+            String categoryKey,
+            String valueKey
+    ) {
         List<Map<String, Object>> out = new ArrayList<>(rows.size());
         for (Map<String, Object> row : rows) {
-            out.add(new LinkedHashMap<>(row));
+            Map<String, Object> copy = new LinkedHashMap<>(row);
+            projectHintKey(copy, categoryKey);
+            projectHintKey(copy, valueKey);
+            out.add(copy);
         }
         return out;
+    }
+
+    private static void projectHintKey(Map<String, Object> row, String hintKey) {
+        if (hintKey == null || hintKey.isBlank() || row.containsKey(hintKey)) {
+            return;
+        }
+        String resolved = resolveKey(row, hintKey);
+        if (resolved != null && row.containsKey(resolved)) {
+            row.put(hintKey, row.get(resolved));
+        }
     }
 
     private static String resolveKey(Map<String, Object> row, String key) {
@@ -138,6 +155,19 @@ public final class ChartCardinalityReducer {
         for (String candidate : row.keySet()) {
             if (candidate.equalsIgnoreCase(key)) {
                 return candidate;
+            }
+        }
+        // Match SQL SELECT aliases for nested semantic paths (totals.visits → visits).
+        int dot = key.lastIndexOf('.');
+        if (dot >= 0 && dot < key.length() - 1) {
+            String alias = key.substring(dot + 1);
+            if (row.containsKey(alias)) {
+                return alias;
+            }
+            for (String candidate : row.keySet()) {
+                if (candidate.equalsIgnoreCase(alias)) {
+                    return candidate;
+                }
             }
         }
         return key;

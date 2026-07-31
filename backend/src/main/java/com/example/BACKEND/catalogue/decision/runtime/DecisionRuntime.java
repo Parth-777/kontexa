@@ -60,8 +60,11 @@ import com.example.BACKEND.catalogue.decision.verification.AnalyticalVerificatio
 import com.example.BACKEND.catalogue.decision.verification.QuestionResultValidator;
 import com.example.BACKEND.catalogue.decision.presentation.executive.ExecutivePresentationBuilder;
 import com.example.BACKEND.catalogue.decision.presentation.executive.ExecutivePresentationStatisticsBuilder;
+import com.example.BACKEND.catalogue.decision.spi.InvestigationRuntimePort;
+import com.example.BACKEND.catalogue.investigation.Phase2InvestigationPathTrace;
 import com.example.BACKEND.catalogue.semantic.canonical.CanonicalRuntimeFinisher;
 import com.example.BACKEND.catalogue.semantic.phase2.GptSemanticPlanningOrchestrator;
+import com.example.BACKEND.catalogue.semantic.phase2.StructuredSemanticPlan;
 import com.example.BACKEND.catalogue.decision.planning.SemanticShadowComparison;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -72,6 +75,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -88,6 +92,11 @@ import java.util.concurrent.ConcurrentHashMap;
 public class DecisionRuntime {
 
     private static final Logger log = LoggerFactory.getLogger(DecisionRuntime.class);
+
+    private static final String SERVED_PATH_CANONICAL = "canonical";
+    private static final String SERVED_PATH_INVESTIGATION = "investigation";
+    private static final String SERVED_PATH_NONE = "none";
+    private static final String INV_ROUTING_UNAVAILABLE = "INV_ROUTING_UNAVAILABLE";
 
     private final IntentResolver            intentResolver;
     private final RegistryResolver          registryResolver;
@@ -126,6 +135,7 @@ public class DecisionRuntime {
     private final AnswerSynthesisInputBuilder          answerSynthesisInputBuilder;
     private final ExecutivePresentationBuilder         executivePresentationBuilder;
     private final ExecutivePresentationStatisticsBuilder executivePresentationStatisticsBuilder;
+    private final Optional<InvestigationRuntimePort> investigationRuntime;
 
     /** In-memory run registry (Phase 1). Replaced by DB persistence in Phase 2. */
     private final ConcurrentHashMap<UUID, ExecutionRun> runRegistry = new ConcurrentHashMap<>();
@@ -167,7 +177,8 @@ public class DecisionRuntime {
             AnswerSynthesizer                    answerSynthesizer,
             AnswerSynthesisInputBuilder          answerSynthesisInputBuilder,
             ExecutivePresentationBuilder         executivePresentationBuilder,
-            ExecutivePresentationStatisticsBuilder executivePresentationStatisticsBuilder
+            ExecutivePresentationStatisticsBuilder executivePresentationStatisticsBuilder,
+            Optional<InvestigationRuntimePort>   investigationRuntime
     ) {
         this.intentResolver    = intentResolver;
         this.registryResolver  = registryResolver;
@@ -206,6 +217,7 @@ public class DecisionRuntime {
         this.answerSynthesisInputBuilder = answerSynthesisInputBuilder;
         this.executivePresentationBuilder = executivePresentationBuilder;
         this.executivePresentationStatisticsBuilder = executivePresentationStatisticsBuilder;
+        this.investigationRuntime = investigationRuntime != null ? investigationRuntime : Optional.empty();
     }
 
     /**
@@ -235,26 +247,37 @@ public class DecisionRuntime {
             log.info("[decision] run={} entities={} metrics={}", runId,
                     bundle.entities().size(), bundle.metrics().size());
 
-            // Stage 2b — semantic extraction, metric resolution, reasoning plan
-            SemanticResolution semanticResolution = questionResolver.resolveFull(intent, bundle);
+            // Stage 2b — legacy lexical resolveFull (Phase 1). Skipped entirely in GPT mode:
+            // CatalogQuestionMatcher / SchemaDrivenMetricResolver / MetricResolutionEngine must
+            // not interpret the question before GptStructuredSemanticPlanner.
+            SemanticResolution semanticResolution;
+            if (gptSemanticOrchestrator.isGptMode()) {
+                semanticResolution = SemanticResolution.bypassedForGptPlanner(intent.question());
+                log.info("[decision] run={} lexicalResolveFull=bypassed mode=gpt reason=semantic_planner_is_authority",
+                        runId);
+            } else {
+                semanticResolution = questionResolver.resolveFull(intent, bundle);
+            }
             ResolvedAnalyticalQuestion resolvedQuestion = semanticResolution.resolved();
             QuestionDrivenReasoningPlan reasoningPlan = semanticResolution.reasoningPlan();
             traceEngine.beginFromPlan(runId, reasoningPlan);
             if (reasoningPlan.transformationSteps() != null && !reasoningPlan.transformationSteps().isEmpty()) {
                 traceEngine.injectTransformationSteps(runId, reasoningPlan.transformationSteps());
             }
-            seedSemanticTrace(runId, resolvedQuestion);
-            log.info("[decision] run={} questionResolved metric={} grouping={} tier={} exec={} exploratory={} confidence={} penalty={}",
-                    runId,
-                    resolvedQuestion.assumption().primaryMetric(),
-                    resolvedQuestion.assumption().grouping(),
-                    resolvedQuestion.confidenceTier(),
-                    resolvedQuestion.executionMode(),
-                    resolvedQuestion.exploratoryMode(),
-                    String.format("%.2f", resolvedQuestion.assumption().resolutionConfidence()),
-                    String.format("%.2f", resolvedQuestion.confidencePenalty()));
-            if (resolvedQuestion.explorationNote() != null && !resolvedQuestion.explorationNote().isBlank()) {
-                log.info("[decision] run={} explorationNote={}", runId, resolvedQuestion.explorationNote());
+            if (!gptSemanticOrchestrator.isGptMode()) {
+                seedSemanticTrace(runId, resolvedQuestion);
+                log.info("[decision] run={} questionResolved metric={} grouping={} tier={} exec={} exploratory={} confidence={} penalty={}",
+                        runId,
+                        resolvedQuestion.assumption().primaryMetric(),
+                        resolvedQuestion.assumption().grouping(),
+                        resolvedQuestion.confidenceTier(),
+                        resolvedQuestion.executionMode(),
+                        resolvedQuestion.exploratoryMode(),
+                        String.format("%.2f", resolvedQuestion.assumption().resolutionConfidence()),
+                        String.format("%.2f", resolvedQuestion.confidencePenalty()));
+                if (resolvedQuestion.explorationNote() != null && !resolvedQuestion.explorationNote().isBlank()) {
+                    log.info("[decision] run={} explorationNote={}", runId, resolvedQuestion.explorationNote());
+                }
             }
 
             AnalysisPlan legacyAnalysisPlan = semanticResolution.analysisPlan();
@@ -266,6 +289,42 @@ public class DecisionRuntime {
             if (gptSemanticOrchestrator.isGptMode()) {
                 gptOutcome = gptSemanticOrchestrator.plan(
                         intent.question(), ctx.tenantId(), bundle);
+
+                if (isPlannerInvestigationMode(gptOutcome.executionMode())) {
+                    log.info("[routing] run={} planner_execution_mode=INVESTIGATION — skip canonical pipeline",
+                            runId);
+                    ExecutionTrace trace = traceEngine.finish(runId);
+                    String plannerMode = gptOutcome.executionMode();
+
+                    if (investigationRuntime.isEmpty()) {
+                        log.warn("[routing] run={} INVESTIGATION requested but InvestigationRuntimePort absent",
+                                runId);
+                        run = lifecycleManager.complete(run);
+                        runRegistry.put(runId, run);
+                        Map<String, Object> investigationError = routingUnavailableInvestigationBlock();
+                        recordPlannerRoutingFacts(runId, intent.question(), plannerMode,
+                                SERVED_PATH_NONE, investigationError, gptOutcome);
+                        return withPlannerRouting(
+                                investigationRoutingUnavailable(runId.toString()),
+                                plannerMode,
+                                SERVED_PATH_NONE,
+                                investigationError);
+                    }
+
+                    DecisionRunResult invResult = investigationRuntime.get().run(
+                            runId.toString(),
+                            intent.question(),
+                            ctx.tenantId(),
+                            gptOutcome,
+                            bundle,
+                            trace);
+                    run = lifecycleManager.complete(run);
+                    runRegistry.put(runId, run);
+                    recordPlannerRoutingFacts(runId, intent.question(), plannerMode,
+                            SERVED_PATH_INVESTIGATION, null, gptOutcome);
+                    return withPlannerRouting(invResult, plannerMode, SERVED_PATH_INVESTIGATION, null);
+                }
+
                 if (gptOutcome.canonicalExecutable()) {
                     canonicalServed = true;
                     activeAnalysisPlan = gptOutcome.analysisPlan();
@@ -279,8 +338,12 @@ public class DecisionRuntime {
                     ExecutionTrace trace = traceEngine.finish(runId);
                     run = lifecycleManager.complete(run);
                     runRegistry.put(runId, run);
-                    return CanonicalRuntimeFinisher.planNotExecutable(
-                            runId, intent.question(), gptOutcome, trace);
+                    return withPlannerRouting(
+                            CanonicalRuntimeFinisher.planNotExecutable(
+                                    runId, intent.question(), gptOutcome, trace),
+                            gptOutcome.executionMode(),
+                            SERVED_PATH_NONE,
+                            null);
                 }
             }
 
@@ -299,10 +362,12 @@ public class DecisionRuntime {
                     Map.of("intent_type", investigationPlan.intentType().name()));
             run = lifecycleManager.transition(run, ExecutionStage.SEMANTIC_ANALYTICAL_EXECUTION);
             runRegistry.put(runId, run);
-            List<AnalyticalCandidate> analyticalCandidates = candidateGenerator.generate(
-                    intent, bundle, semanticResolution.semantics(), semanticResolution.metricResolution());
+            List<AnalyticalCandidate> analyticalCandidates = gptSemanticOrchestrator.isGptMode()
+                    ? List.of()
+                    : candidateGenerator.generate(
+                            intent, bundle, semanticResolution.semantics(), semanticResolution.metricResolution());
             QuestionInvestigation investigation = semanticResolution.investigation();
-            if (investigation != null) {
+            if (investigation != null && !gptSemanticOrchestrator.isGptMode()) {
                 log.info("[investigation] run={} entity={} metric={} intent={} dimension={} executable={}",
                         runId,
                         investigation.extraction().businessEntityKey(),
@@ -322,7 +387,7 @@ public class DecisionRuntime {
                     log.warn("[investigation] run={} blocked: {}", runId, investigation.blockingReason());
                 }
             }
-            if (semanticResolution.analysisPlan() != null) {
+            if (semanticResolution.analysisPlan() != null && !gptSemanticOrchestrator.isGptMode()) {
                 var ap = semanticResolution.analysisPlan();
                 log.info("[analysis-plan] run={} legacy intent={} metric={} dimension={} relationship={} executable={}",
                         runId, ap.intent(), ap.primaryMetric(), ap.dimension(),
@@ -407,20 +472,28 @@ public class DecisionRuntime {
                 runRegistry.put(runId, run);
                 if (CanonicalRuntimeFinisher.countCanonicalRows(analyticalSpecs, templateResults) == 0) {
                     log.info("[canonical] run={} zero canonical rows — no legacy fallback", runId);
-                    return CanonicalRuntimeFinisher.noMatchingData(runId, trace);
+                    return withPlannerRouting(
+                            CanonicalRuntimeFinisher.noMatchingData(runId, trace),
+                            gptOutcome.executionMode(),
+                            SERVED_PATH_CANONICAL,
+                            null);
                 }
                 log.info("[canonical] run={} finishing via answer synthesis only", runId);
-                return CanonicalRuntimeFinisher.withWarehouseRows(
-                        runId,
-                        intent.question(),
-                        analyticalSpecs,
-                        templateResults,
-                        gptOutcome,
-                        answerSynthesisInputBuilder,
-                        answerSynthesizer,
-                        executivePresentationBuilder,
-                        executivePresentationStatisticsBuilder,
-                        trace);
+                return withPlannerRouting(
+                        CanonicalRuntimeFinisher.withWarehouseRows(
+                                runId,
+                                intent.question(),
+                                analyticalSpecs,
+                                templateResults,
+                                gptOutcome,
+                                answerSynthesisInputBuilder,
+                                answerSynthesizer,
+                                executivePresentationBuilder,
+                                executivePresentationStatisticsBuilder,
+                                trace),
+                        gptOutcome.executionMode(),
+                        SERVED_PATH_CANONICAL,
+                        null);
             }
 
             SemanticShadowComparison semanticShadow = null;
@@ -704,9 +777,24 @@ public class DecisionRuntime {
             // Done
             run = lifecycleManager.complete(run);
             runRegistry.put(runId, run);
-            return new DecisionRunResult(output, analytical, verificationCtx, semanticShadow, answerSynthesisResult);
+            PlannerRoutingOutcome routing = gptOutcome != null && canonicalServed
+                    ? new PlannerRoutingOutcome(
+                            gptOutcome.executionMode(), SERVED_PATH_CANONICAL, null)
+                    : null;
+            return new DecisionRunResult(
+                    output, analytical, verificationCtx, semanticShadow, answerSynthesisResult,
+                    null, null, routing);
 
         } catch (Exception ex) {
+            Phase2InvestigationPathTrace t = Phase2InvestigationPathTrace.current();
+            if (t != null) {
+                t.setException(ex);
+                t.setRootCauseSummary(
+                        "DecisionRuntime failed at stage " + run.stage() + ": "
+                                + ex.getClass().getName() + ": " + ex.getMessage());
+                t.writeToFile("decision_runtime_catch_" + runId);
+                t.logSummary();
+            }
             log.error("[decision] run={} FAILED stage={} error={}", runId, run.stage(), ex.getMessage(), ex);
             run = lifecycleManager.fail(run, ex.getMessage());
             runRegistry.put(runId, run);
@@ -820,7 +908,10 @@ public class DecisionRuntime {
         facts.put("question", question != null ? question : "");
         facts.put("planner_mode", gptSemanticOrchestrator.isGptMode() ? "gpt"
                 : (gptSemanticOrchestrator.isShadowMode() ? "shadow" : "legacy"));
-        facts.put("served_path", canonicalServed ? "canonical" : "legacy");
+        facts.put("served_path", canonicalServed ? SERVED_PATH_CANONICAL : "legacy");
+        if (gptOutcome != null && gptOutcome.executionMode() != null) {
+            facts.put("planner_execution_mode", gptOutcome.executionMode());
+        }
         if (canonicalServed && activeAnalysisPlan != null) {
             facts.put("resolved_metric", activeAnalysisPlan.primaryMetric());
             facts.put("resolved_dimension", activeAnalysisPlan.dimension());
@@ -1092,5 +1183,94 @@ public class DecisionRuntime {
     /** Create an execution context from a raw HTTP request body. */
     public static DecisionExecutionContext contextFrom(String tenantId, String question, Map<String, Object> meta) {
         return new DecisionExecutionContext(UUID.randomUUID(), tenantId, question, meta);
+    }
+
+    /**
+     * Routing gate — reads only {@link GptSemanticPlanningOrchestrator.GptPlanningOutcome#executionMode()}.
+     * No question text, keywords, or intent inspection.
+     */
+    private static boolean isPlannerInvestigationMode(String executionMode) {
+        return StructuredSemanticPlan.MODE_INVESTIGATION.equalsIgnoreCase(executionMode);
+    }
+
+    private static DecisionRunResult withPlannerRouting(
+            DecisionRunResult result,
+            String plannerExecutionMode,
+            String servedPath,
+            Map<String, Object> investigation) {
+        return new DecisionRunResult(
+                result.insight(),
+                result.analytical(),
+                result.verification(),
+                result.semanticShadow(),
+                result.answerSynthesis(),
+                result.executivePresentation(),
+                result.executiveTable(),
+                new PlannerRoutingOutcome(plannerExecutionMode, servedPath, investigation));
+    }
+
+    private DecisionRunResult investigationRoutingUnavailable(String runId) {
+        String message = "Investigation mode is not enabled on this environment.";
+        InsightOutput insight = new InsightOutput(
+                runId,
+                "Investigation unavailable",
+                message,
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                "Investigation routing unavailable.");
+        AnalyticalResponse analytical = new AnalyticalResponse(
+                message,
+                List.of(),
+                List.of(),
+                null,
+                new AnalyticalResponse.InsightBlock("Investigation unavailable", message),
+                0.0);
+        return new DecisionRunResult(insight, analytical);
+    }
+
+    private static Map<String, Object> routingUnavailableInvestigationBlock() {
+        Map<String, Object> investigation = new LinkedHashMap<>();
+        investigation.put("outcome", "ERROR");
+        investigation.put("reason_code", INV_ROUTING_UNAVAILABLE);
+        investigation.put("message", "Investigation mode is not enabled on this environment.");
+        investigation.put("remediation",
+                "Wire InvestigationRuntimePort or rephrase as a descriptive retrieval question.");
+        return investigation;
+    }
+
+    private void recordPlannerRoutingFacts(
+            UUID runId,
+            String question,
+            String plannerExecutionMode,
+            String servedPath,
+            Map<String, Object> investigation,
+            GptSemanticPlanningOrchestrator.GptPlanningOutcome gptOutcome) {
+        Map<String, Object> facts = new LinkedHashMap<>();
+        facts.put("question", question != null ? question : "");
+        facts.put("planner_mode", "gpt");
+        facts.put("planner_execution_mode", plannerExecutionMode);
+        facts.put("served_path", servedPath);
+        if (investigation != null) {
+            facts.put("investigation", investigation);
+        }
+        if (gptOutcome != null && gptOutcome.semanticPlan() != null) {
+            facts.put("gpt_confidence", gptOutcome.semanticPlan().confidence());
+            facts.put("gpt_validation_valid", gptOutcome.validation().valid());
+            if (!gptOutcome.validation().issues().isEmpty()) {
+                facts.put("gpt_validation_issues", gptOutcome.validation().issues());
+            }
+            if (gptOutcome.semanticPlan().metric() != null) {
+                facts.put("resolved_metric", gptOutcome.semanticPlan().metric());
+            }
+            if (gptOutcome.semanticPlan().dimensions() != null
+                    && !gptOutcome.semanticPlan().dimensions().isEmpty()) {
+                facts.put("resolved_dimension", gptOutcome.semanticPlan().dimensions().getFirst());
+            }
+            facts.put("resolved_intent", gptOutcome.semanticPlan().intent());
+        }
+        diagnosticSession.recordWarehouseFacts(runId, facts);
     }
 }

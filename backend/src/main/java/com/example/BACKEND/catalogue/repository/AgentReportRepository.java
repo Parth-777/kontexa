@@ -12,6 +12,11 @@ public interface AgentReportRepository extends JpaRepository<AgentReportEntity, 
 
     List<AgentReportEntity> findByClientIdOrderByGeneratedAtDesc(String clientId);
 
+    List<AgentReportEntity> findByTenantIdOrderByGeneratedAtDesc(UUID tenantId);
+
     List<AgentReportEntity> findByClientIdAndPeriodTypeOrderByGeneratedAtDesc(
             String clientId, String periodType);
+
+    List<AgentReportEntity> findByTenantIdAndPeriodTypeOrderByGeneratedAtDesc(
+            UUID tenantId, String periodType);
 }

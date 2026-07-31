@@ -11,6 +11,8 @@ import com.example.BACKEND.catalogue.service.SchemaDiscoveryService;
 import com.example.BACKEND.catalogue.service.BigQueryCatalogueService;
 import com.example.BACKEND.catalogue.service.SnowflakeCatalogueService;
 import com.example.BACKEND.tenant.TenantCloudConnectionService;
+import com.example.BACKEND.tenant.TenantContextResolver;
+import com.example.BACKEND.tenancy.TenantContext;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -18,37 +20,9 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * CatalogueController
+ * Catalogue creation and approval API.
  *
- * REST API for the full catalogue creation pipeline.
- *
- * STAGE ENDPOINTS (run in order for a new client):
- *
- *   POST /api/catalogue/discover
- *     → Stage 1 only: tables + columns structure (fast, no data read)
- *
- *   POST /api/catalogue/build
- *     → Stage 1 + 2: structure + sampled values (no LLM)
- *
- *   POST /api/catalogue/build-full
- *     → Stage 1 + 2 + 3: structure + sampling + LLM enrichment
- *     → This is the main endpoint for onboarding a new client
- *     → Takes ~30-60 seconds depending on table count
- *
- * APPROVAL ENDPOINTS (after reviewing the catalogue):
- *
- *   POST /api/catalogue/save?clientId=acme
- *     → Persist the enriched catalogue as DRAFT in the database
- *     → Body: the CatalogueResult JSON returned by /build-full
- *
- *   POST /api/catalogue/{id}/approve
- *     → Mark a saved catalogue as APPROVED (ready for NLP queries)
- *
- *   POST /api/catalogue/{id}/reject
- *     → Mark a saved catalogue as REJECTED (needs a re-run)
- *
- *   GET  /api/catalogue/list?clientId=acme
- *     → List all catalogues for a client
+ * Tenant ownership comes exclusively from the authenticated {@code TenantContext}.
  */
 @RestController
 @RequestMapping("/api/catalogue")
@@ -62,6 +36,7 @@ public class CatalogueController {
     private final TenantCloudConnectionService cloudConnectionService;
     private final BigQueryCatalogueService bigQueryCatalogueService;
     private final SnowflakeCatalogueService snowflakeCatalogueService;
+    private final TenantContextResolver tenantContextResolver;
 
     public CatalogueController(SchemaDiscoveryService schemaDiscovery,
                                 DataSamplerService dataSampler,
@@ -70,7 +45,8 @@ public class CatalogueController {
                                 CatalogueApprovalService approvalService,
                                 TenantCloudConnectionService cloudConnectionService,
                                 BigQueryCatalogueService bigQueryCatalogueService,
-                                SnowflakeCatalogueService snowflakeCatalogueService) {
+                                SnowflakeCatalogueService snowflakeCatalogueService,
+                                TenantContextResolver tenantContextResolver) {
         this.schemaDiscovery = schemaDiscovery;
         this.dataSampler = dataSampler;
         this.enrichmentService = enrichmentService;
@@ -79,17 +55,19 @@ public class CatalogueController {
         this.cloudConnectionService = cloudConnectionService;
         this.bigQueryCatalogueService = bigQueryCatalogueService;
         this.snowflakeCatalogueService = snowflakeCatalogueService;
+        this.tenantContextResolver = tenantContextResolver;
     }
 
-    /**
-     * Stage 1 only: discover tables and columns.
-     * Fast — useful to verify schema before running the full pipeline.
-     */
     @PostMapping("/discover")
-    public ResponseEntity<CatalogueResult> discover(@RequestBody Map<String, String> body) {
-        String schema = body.getOrDefault("schema", "public");
-        System.out.println("[Catalogue] Starting schema discovery for schema: " + schema);
-        CatalogueResult result = resolveCloud(body)
+    public ResponseEntity<CatalogueResult> discover(
+            @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
+            @RequestBody Map<String, String> body) {
+        String tenantKey = tenantContextResolver.resolveClientId(clientIdHeader, body);
+        // Local PG discovery is pinned to the authenticated tenant key.
+        // Body "schema" is never used as ownership authority.
+        String schema = tenantKey;
+        System.out.println("[Catalogue] Starting schema discovery for tenant=" + tenantKey);
+        CatalogueResult result = resolveCloud(tenantKey)
                 .map(cc -> discoverFromCloud(cc, false))
                 .orElseGet(() -> schemaDiscovery.discover(schema));
 
@@ -100,16 +78,15 @@ public class CatalogueController {
         return ResponseEntity.ok(result);
     }
 
-    /**
-     * Stage 1 + 2: discover + sample.
-     * Returns raw schema with real column values. No LLM call.
-     */
     @PostMapping("/build")
-    public ResponseEntity<CatalogueResult> build(@RequestBody Map<String, String> body) {
-        String schema = body.getOrDefault("schema", "public");
-        System.out.println("[Catalogue] Starting catalogue build (no enrichment) for schema: " + schema);
+    public ResponseEntity<CatalogueResult> build(
+            @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
+            @RequestBody Map<String, String> body) {
+        String tenantKey = tenantContextResolver.resolveClientId(clientIdHeader, body);
+        String schema = tenantKey;
+        System.out.println("[Catalogue] Starting catalogue build for tenant=" + tenantKey);
         CatalogueResult result;
-        var cloud = resolveCloud(body);
+        var cloud = resolveCloud(tenantKey);
         if (cloud.isPresent()) {
             result = discoverFromCloud(cloud.get(), true);
             System.out.println("[Catalogue] Stage 1+2 complete via " + cloud.get().provider() + " connector");
@@ -122,22 +99,16 @@ public class CatalogueController {
         return ResponseEntity.ok(result);
     }
 
-    /**
-     * Stage 1 + 2 + 3: discover + sample + LLM enrichment.
-     *
-     * This is the MAIN endpoint for creating a client catalogue.
-     * Run this once per client during onboarding.
-     *
-     * Takes ~30-60 seconds for a typical database.
-     * Returns a fully enriched catalogue ready for client review and approval.
-     */
     @PostMapping("/build-full")
-    public ResponseEntity<CatalogueResult> buildFull(@RequestBody Map<String, String> body) {
-        String schema = body.getOrDefault("schema", "public");
-        System.out.println("[Catalogue] Starting FULL catalogue build for schema: " + schema);
+    public ResponseEntity<CatalogueResult> buildFull(
+            @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
+            @RequestBody Map<String, String> body) {
+        String tenantKey = tenantContextResolver.resolveClientId(clientIdHeader, body);
+        String schema = tenantKey;
+        System.out.println("[Catalogue] Starting FULL catalogue build for tenant=" + tenantKey);
 
         CatalogueResult result;
-        var cloud = resolveCloud(body);
+        var cloud = resolveCloud(tenantKey);
         if (cloud.isPresent()) {
             result = discoverFromCloud(cloud.get(), true);
             System.out.println("[Catalogue] Stage 1+2 complete via " + cloud.get().provider() + " connector — "
@@ -160,31 +131,24 @@ public class CatalogueController {
         return ResponseEntity.ok(result);
     }
 
-    // ── Cloud routing helpers ─────────────────────────────────────────────────
-
-    /** Opaque wrapper so discover/build endpoints don't need to know the provider. */
     private record CloudConnectorConfig(
             String provider,
             TenantCloudConnectionService.BigQueryConfig bigQuery,
             TenantCloudConnectionService.SnowflakeConfig snowflake
     ) {}
 
-    private java.util.Optional<CloudConnectorConfig> resolveCloud(Map<String, String> body) {
-        for (String key : List.of(
-                body.getOrDefault("tenantId", ""),
-                body.getOrDefault("clientId", ""),
-                body.getOrDefault("schema", "")
-        )) {
-            if (key.isBlank()) continue;
-            String provider = cloudConnectionService.getProvider(key);
-            if ("bigquery".equals(provider)) {
-                return cloudConnectionService.getBigQueryConfig(key)
-                        .map(cfg -> new CloudConnectorConfig("bigquery", cfg, null));
-            }
-            if ("snowflake".equals(provider)) {
-                return cloudConnectionService.getSnowflakeConfig(key)
-                        .map(cfg -> new CloudConnectorConfig("snowflake", null, cfg));
-            }
+    private java.util.Optional<CloudConnectorConfig> resolveCloud(String tenantKey) {
+        if (tenantKey == null || tenantKey.isBlank()) {
+            return java.util.Optional.empty();
+        }
+        String provider = cloudConnectionService.getProvider(tenantKey);
+        if ("bigquery".equals(provider)) {
+            return cloudConnectionService.getBigQueryConfig(tenantKey)
+                    .map(cfg -> new CloudConnectorConfig("bigquery", cfg, null));
+        }
+        if ("snowflake".equals(provider)) {
+            return cloudConnectionService.getSnowflakeConfig(tenantKey)
+                    .map(cfg -> new CloudConnectorConfig("snowflake", null, cfg));
         }
         return java.util.Optional.empty();
     }
@@ -197,44 +161,35 @@ public class CatalogueController {
         };
     }
 
-    // ── Approval Flow ────────────────────────────────────────────────────────
-
-    /**
-     * Persist an enriched CatalogueResult to the database as DRAFT.
-     *
-     * Call this after /build-full and reviewing the JSON output.
-     * Body: the CatalogueResult JSON returned by /build-full
-     * Query param: clientId (e.g. "netflix", "acme")
-     *
-     * Returns the saved catalogue's id — keep it, you'll need it to approve.
-     */
     @PostMapping("/save")
     public ResponseEntity<Map<String, Object>> save(
-            @RequestParam String clientId,
+            @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
+            @RequestParam(required = false) String clientId,
             @RequestBody CatalogueResult result) {
 
-        System.out.println("[Catalogue] Saving catalogue for client: " + clientId);
-        ClientCatalogueEntity saved = storageService.save(clientId, result);
+        TenantContext ctx = tenantContextResolver.resolveContext(clientIdHeader, clientId);
+        System.out.println("[Catalogue] Saving catalogue for tenant=" + ctx.tenantId()
+                + " slug=" + ctx.legacyTenantKey());
+        ClientCatalogueEntity saved = storageService.save(
+                ctx.legacyTenantKey(), ctx.tenantId(), result);
         System.out.println("[Catalogue] Saved with id=" + saved.getId() + " status=" + saved.getStatus());
 
         return ResponseEntity.ok(Map.of(
                 "id",       saved.getId(),
                 "clientId", saved.getClientId(),
+                "tenantId", saved.getTenantId() != null ? saved.getTenantId().toString() : "",
                 "status",   saved.getStatus(),
                 "tables",   saved.getTables().size()
         ));
     }
 
-    /**
-     * Approve a saved catalogue — makes it available for NLP queries.
-     *
-     * POST /api/catalogue/{id}/approve
-     */
     @PostMapping("/{id}/approve")
     public ResponseEntity<Map<String, Object>> approve(
             @PathVariable Long id,
+            @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
             @RequestParam(required = false) String clientId) {
-        ClientCatalogueEntity approved = approvalService.approve(id, clientId);
+        TenantContext ctx = tenantContextResolver.resolveContext(clientIdHeader, clientId);
+        ClientCatalogueEntity approved = approvalService.approve(id, ctx.legacyTenantKey());
         System.out.println("[Catalogue] Approved catalogue id=" + id);
         return ResponseEntity.ok(Map.of(
                 "id",     approved.getId(),
@@ -243,104 +198,101 @@ public class CatalogueController {
         ));
     }
 
-    /**
-     * Reject a saved catalogue (needs rework / re-run).
-     *
-     * POST /api/catalogue/{id}/reject
-     */
     @PostMapping("/{id}/reject")
     public ResponseEntity<Map<String, Object>> reject(
             @PathVariable Long id,
+            @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
             @RequestParam(required = false) String clientId) {
-        ClientCatalogueEntity rejected = approvalService.reject(id, clientId);
+        TenantContext ctx = tenantContextResolver.resolveContext(clientIdHeader, clientId);
+        ClientCatalogueEntity rejected = approvalService.reject(id, ctx.legacyTenantKey());
         return ResponseEntity.ok(Map.of(
                 "id",     rejected.getId(),
                 "status", rejected.getStatus()
         ));
     }
 
-    /**
-     * List all catalogues for a client (DRAFT, APPROVED, REJECTED).
-     *
-     * GET /api/catalogue/list?clientId=netflix
-     */
     @GetMapping("/list")
     public ResponseEntity<List<Map<String, Object>>> list(
+            @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
             @RequestParam(required = false) String clientId,
             @RequestParam(required = false) String tenantId,
             @RequestParam(required = false) String tenantSchema) {
-        List<ClientCatalogueEntity> catalogues;
-        if (clientId != null && !clientId.isBlank()) {
-            catalogues = approvalService.listForClient(clientId);
-        } else {
-            catalogues = approvalService.listForTenantContext(tenantId, tenantSchema);
-        }
+        TenantContext ctx = tenantContextResolver.resolveContext(
+                clientIdHeader, clientId, tenantId, tenantSchema);
+        List<ClientCatalogueEntity> catalogues = approvalService.listForTenant(ctx);
 
         List<Map<String, Object>> response = catalogues
                 .stream()
-                .map(c -> Map.<String, Object>of(
-                        "id",          c.getId(),
-                        "clientId",    c.getClientId(),
-                        "schemaName",  c.getSchemaName(),
-                        "status",      c.getStatus(),
-                        "tableCount",  c.getTables().size(),
-                        "createdAt",   c.getCreatedAt().toString()
-                ))
+                .map(c -> {
+                    Map<String, Object> m = new java.util.LinkedHashMap<>();
+                    m.put("id", c.getId());
+                    m.put("clientId", c.getClientId());
+                    m.put("tenantId", c.getTenantId() != null ? c.getTenantId().toString() : "");
+                    m.put("schemaName", c.getSchemaName());
+                    m.put("status", c.getStatus());
+                    m.put("tableCount", c.getTables().size());
+                    m.put("createdAt", c.getCreatedAt().toString());
+                    return m;
+                })
                 .toList();
         return ResponseEntity.ok(response);
     }
 
-    /**
-     * Get a single catalogue in preview form so tenant can review before approving.
-     *
-     * GET /api/catalogue/{id}?clientId=netflix
-     */
     @GetMapping("/{id}")
     public ResponseEntity<Map<String, Object>> getById(
             @PathVariable Long id,
+            @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
             @RequestParam(required = false) String clientId,
             @RequestParam(required = false) String tenantId,
             @RequestParam(required = false) String tenantSchema) {
-        ClientCatalogueEntity c = approvalService.getForTenantContext(id, tenantId, tenantSchema, clientId);
+        TenantContext ctx = tenantContextResolver.resolveContext(
+                clientIdHeader, clientId, tenantId, tenantSchema);
+        ClientCatalogueEntity c = approvalService.requireOwned(id, ctx);
         long totalColumns = c.getTables().stream().mapToLong(t -> t.getColumns().size()).sum();
         List<Map<String, Object>> tables = c.getTables().stream()
                 .map(this::toTablePreview)
                 .toList();
 
-        return ResponseEntity.ok(Map.of(
-                "id", c.getId(),
-                "clientId", c.getClientId(),
-                "schemaName", c.getSchemaName(),
-                "databaseName", c.getDatabaseName() == null ? "" : c.getDatabaseName(),
-                "status", c.getStatus(),
-                "tableCount", c.getTables().size(),
-                "columnCount", totalColumns,
-                "createdAt", c.getCreatedAt().toString(),
-                "updatedAt", c.getUpdatedAt().toString(),
-                "tables", tables
-        ));
+        Map<String, Object> response = new java.util.LinkedHashMap<>();
+        response.put("id", c.getId());
+        response.put("clientId", c.getClientId());
+        response.put("tenantId", c.getTenantId() != null ? c.getTenantId().toString() : "");
+        response.put("schemaName", c.getSchemaName());
+        response.put("databaseName", c.getDatabaseName() == null ? "" : c.getDatabaseName());
+        response.put("status", c.getStatus());
+        response.put("tableCount", c.getTables().size());
+        response.put("columnCount", totalColumns);
+        response.put("createdAt", c.getCreatedAt().toString());
+        response.put("updatedAt", c.getUpdatedAt().toString());
+        response.put("businessProfile", c.getBusinessProfile() == null ? "" : c.getBusinessProfile());
+        response.put("globalCaveats", c.getGlobalCaveats() == null ? "[]" : c.getGlobalCaveats());
+        response.put("entities", c.getEntitiesJson() == null ? "[]" : c.getEntitiesJson());
+        if (c.getLineageKey() != null) {
+            response.put("lineageKey", c.getLineageKey());
+        }
+        if (c.getSupersedesCatalogueId() != null) {
+            response.put("supersedesCatalogueId", c.getSupersedesCatalogueId());
+        }
+        response.put("tables", tables);
+        return ResponseEntity.ok(response);
     }
 
-    /**
-     * Update catalogue content (table/column descriptions and roles) from tenant review page.
-     *
-     * PUT /api/catalogue/{id}?tenantId=...&tenantSchema=...
-     */
     @PutMapping("/{id}")
     public ResponseEntity<Map<String, Object>> updateById(
             @PathVariable Long id,
+            @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
             @RequestParam(required = false) String clientId,
             @RequestParam(required = false) String tenantId,
             @RequestParam(required = false) String tenantSchema,
             @RequestBody Map<String, Object> body) {
+        TenantContext ctx = tenantContextResolver.resolveContext(
+                clientIdHeader, clientId, tenantId, tenantSchema);
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> tables = body.get("tables") instanceof List<?> list
                 ? (List<Map<String, Object>>) list
                 : List.of();
 
-        ClientCatalogueEntity updated = approvalService.updateFromTenantContext(
-                id, tenantId, tenantSchema, clientId, tables
-        );
+        ClientCatalogueEntity updated = approvalService.updateOwned(id, ctx, tables);
         return ResponseEntity.ok(Map.of(
                 "id", updated.getId(),
                 "status", updated.getStatus(),
@@ -351,13 +303,20 @@ public class CatalogueController {
     private Map<String, Object> toTablePreview(CatalogueTableEntity table) {
         List<Map<String, Object>> columns = table.getColumns()
                 .stream()
-                .map(col -> Map.<String, Object>of(
-                        "columnName", col.getColumnName(),
-                        "dataType", col.getDataType() == null ? "" : col.getDataType(),
-                        "description", col.getDescription() == null ? "" : col.getDescription(),
-                        "role", col.getRole() == null ? "" : col.getRole(),
-                        "sampleValues", col.getSampleValues() == null ? "[]" : col.getSampleValues()
-                ))
+                .map(col -> {
+                    Map<String, Object> m = new java.util.LinkedHashMap<>();
+                    m.put("columnName", col.getColumnName());
+                    m.put("dataType", col.getDataType() == null ? "" : col.getDataType());
+                    m.put("description", col.getDescription() == null ? "" : col.getDescription());
+                    m.put("businessMeaning", col.getBusinessMeaning() == null ? "" : col.getBusinessMeaning());
+                    m.put("role", col.getRole() == null ? "" : col.getRole());
+                    m.put("aggregationMethod", col.getAggregationMethod() == null ? "" : col.getAggregationMethod());
+                    m.put("sampleValues", col.getSampleValues() == null ? "[]" : col.getSampleValues());
+                    if (col.getConfidence() != null) {
+                        m.put("confidence", col.getConfidence());
+                    }
+                    return m;
+                })
                 .toList();
         return Map.of(
                 "tableName", table.getTableName(),

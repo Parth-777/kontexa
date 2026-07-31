@@ -52,12 +52,15 @@ public class ExecutivePresentationBuilder {
             return ExecutivePresentation.empty("SCALAR");
         }
 
+        List<Map<String, Object>> analyticalRows =
+                PresentationBuildContext.alignWarehouseKeysToCanonical(model, warehouseRows);
+
         PresentationStrategyType type = resolver.resolve(model);
         PresentationStrategy strategy = strategies.get(type);
         if (strategy == null) {
             return ExecutivePresentation.empty(type.name());
         }
-        return strategy.build(model, List.copyOf(warehouseRows), context);
+        return strategy.build(model, List.copyOf(analyticalRows), context);
     }
 
     public ResponseMode responseMode(ExecutivePresentation presentation) {

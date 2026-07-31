@@ -243,6 +243,17 @@ public final class DecisionModels {
             String       prioritizationRationale
     ) {}
 
+    /**
+     * GPT planner routing metadata — which runtime served the answer.
+     * {@code plannerExecutionMode} is CANONICAL | INVESTIGATION from the structured planner JSON.
+     * {@code servedPath} is canonical | investigation | none.
+     */
+    public record PlannerRoutingOutcome(
+            String plannerExecutionMode,
+            String servedPath,
+            java.util.Map<String, Object> investigation
+    ) {}
+
     /** Full decision run output — LLM insight + structured analytical presentation. */
     public record DecisionRunResult(
             InsightOutput insight,
@@ -251,13 +262,14 @@ public final class DecisionModels {
             SemanticShadowComparison semanticShadow,
             com.example.BACKEND.catalogue.decision.synthesis.answer.AnswerSynthesisOutput answerSynthesis,
             com.example.BACKEND.catalogue.decision.presentation.executive.ExecutivePresentation executivePresentation,
-            com.example.BACKEND.catalogue.semantic.canonical.FormattedExecutiveTable executiveTable
+            com.example.BACKEND.catalogue.semantic.canonical.FormattedExecutiveTable executiveTable,
+            PlannerRoutingOutcome routing
     ) {
         public DecisionRunResult(
                 InsightOutput insight,
                 com.example.BACKEND.catalogue.decision.presentation.AnalyticalResponse analytical
         ) {
-            this(insight, analytical, null, null, null, null, null);
+            this(insight, analytical, null, null, null, null, null, null);
         }
 
         public DecisionRunResult(
@@ -265,7 +277,7 @@ public final class DecisionModels {
                 com.example.BACKEND.catalogue.decision.presentation.AnalyticalResponse analytical,
                 com.example.BACKEND.catalogue.decision.verification.AnalyticalVerificationOrchestrator.VerificationContext verification
         ) {
-            this(insight, analytical, verification, null, null, null, null);
+            this(insight, analytical, verification, null, null, null, null, null);
         }
 
         public DecisionRunResult(
@@ -274,7 +286,7 @@ public final class DecisionModels {
                 com.example.BACKEND.catalogue.decision.verification.AnalyticalVerificationOrchestrator.VerificationContext verification,
                 SemanticShadowComparison semanticShadow
         ) {
-            this(insight, analytical, verification, semanticShadow, null, null, null);
+            this(insight, analytical, verification, semanticShadow, null, null, null, null);
         }
 
         public DecisionRunResult(
@@ -284,7 +296,7 @@ public final class DecisionModels {
                 SemanticShadowComparison semanticShadow,
                 com.example.BACKEND.catalogue.decision.synthesis.answer.AnswerSynthesisOutput answerSynthesis
         ) {
-            this(insight, analytical, verification, semanticShadow, answerSynthesis, null, null);
+            this(insight, analytical, verification, semanticShadow, answerSynthesis, null, null, null);
         }
 
         public DecisionRunResult(
@@ -295,7 +307,7 @@ public final class DecisionModels {
                 com.example.BACKEND.catalogue.decision.synthesis.answer.AnswerSynthesisOutput answerSynthesis,
                 com.example.BACKEND.catalogue.decision.presentation.executive.ExecutivePresentation executivePresentation
         ) {
-            this(insight, analytical, verification, semanticShadow, answerSynthesis, executivePresentation, null);
+            this(insight, analytical, verification, semanticShadow, answerSynthesis, executivePresentation, null, null);
         }
     }
 

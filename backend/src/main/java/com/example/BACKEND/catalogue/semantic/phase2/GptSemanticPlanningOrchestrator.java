@@ -234,14 +234,19 @@ public class GptSemanticPlanningOrchestrator {
         }
 
         /**
-         * INVESTIGATION questions route to the sibling investigation runtime, but only
-         * when the canonical plan is also executable (Investigation reuses the canonical
-         * measure/table as its decomposition base). Otherwise the question falls through
-         * to the existing canonical not-executable handling — Phase-1 behavior unchanged.
+         * INVESTIGATION questions route to the sibling investigation runtime when the
+         * planner supplies a valid investigation payload and the canonical plan is executable.
          */
         public boolean requiresInvestigation() {
+            boolean hasPlan = semanticPlan != null
+                    && semanticPlan.investigationPlan() != null
+                    && !semanticPlan.investigationPlan().isNull();
+            boolean hasLegacyObjective = semanticPlan != null
+                    && semanticPlan.investigationObjective() != null
+                    && !semanticPlan.investigationObjective().isNull();
             return StructuredSemanticPlan.MODE_INVESTIGATION.equalsIgnoreCase(executionMode)
-                    && canonicalExecutable();
+                    && canonicalExecutable()
+                    && (hasPlan || hasLegacyObjective);
         }
     }
 }

@@ -120,13 +120,15 @@ public class WorkspaceAuthController {
 
     @GetMapping("/api/auth/workspaces")
     public ResponseEntity<?> listWorkspaces(@RequestParam(required = false) String email) {
-        String resolvedEmail = email;
-        AuthContext ctx = AuthContextHolder.get();
-        if ((resolvedEmail == null || resolvedEmail.isBlank()) && ctx != null) {
-            resolvedEmail = ctx.email();
-        }
+        AuthContext ctx = AuthContextHolder.require();
+        String resolvedEmail = ctx.email();
         if (resolvedEmail == null || resolvedEmail.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "email is required"));
+        }
+        // Optional email query is mismatch-checked only — never used as authority.
+        if (email != null && !email.isBlank()
+                && !resolvedEmail.trim().equalsIgnoreCase(email.trim())) {
+            throw new ForbiddenException("Email mismatch between request and authenticated identity.");
         }
         return ResponseEntity.ok(Map.of(
                 "workspaces", identityResolver.listWorkspacesForEmail(resolvedEmail.trim())

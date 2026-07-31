@@ -5,6 +5,7 @@ import com.example.BACKEND.catalogue.entity.CatalogueColumnEntity;
 import com.example.BACKEND.catalogue.entity.CatalogueTableEntity;
 import com.example.BACKEND.catalogue.entity.ClientCatalogueEntity;
 import com.example.BACKEND.catalogue.service.CatalogueApprovalService;
+import com.example.BACKEND.catalogue.schema.NestedSchemaFieldGraph;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -66,6 +67,10 @@ public class SchemaDiscoveryAdapter {
 
         for (CatalogueTableEntity table : catalogue.getTables()) {
             for (CatalogueColumnEntity col : table.getColumns()) {
+                if (NestedSchemaFieldGraph.isNestedContainerType(col.getDataType())
+                        || NestedSchemaFieldGraph.ROLE_CONTAINER.equalsIgnoreCase(col.getRole())) {
+                    continue;
+                }
                 String typeLower = col.getDataType() == null ? "" : col.getDataType().toLowerCase();
                 String ref = table.getTableName() + "." + col.getColumnName();
 

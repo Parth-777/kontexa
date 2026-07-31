@@ -8,6 +8,7 @@ import com.example.BACKEND.catalogue.decision.contracts.DecisionModels.QuerySpec
 import com.example.BACKEND.catalogue.decision.execution.repair.ExecutionDiagnosticSession;
 import com.example.BACKEND.catalogue.decision.execution.repair.ExecutionDiagnostics;
 import com.example.BACKEND.catalogue.decision.execution.repair.RepairOutcome;
+import com.example.BACKEND.catalogue.investigation.Phase2InvestigationPathTrace;
 import com.example.BACKEND.identity.auth.TenantAccessGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,6 +16,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -133,13 +135,66 @@ public class AnalyticalSqlExecutionService {
                 }
                 results.add(result);
             } else {
-                ComputationResultSet rs = warehouseExecutor.execute(singlePlan(spec, tenantId), tenantId);
-                if (!rs.results().isEmpty()) {
-                    results.add(rs.results().getFirst());
+                // Investigation evidence specs (ev_*) and other non-tpl__ keys take this path.
+                // Template fallbacks are skipped — BQ errors are recorded on Phase2InvestigationPathTrace.
+                try {
+                    ComputationResultSet rs = warehouseExecutor.execute(singlePlan(spec, tenantId), tenantId);
+                    recordComputationMetaErrors(spec, rs);
+                    if (!rs.results().isEmpty()) {
+                        results.add(rs.results().getFirst());
+                    } else {
+                        Phase2InvestigationPathTrace t = Phase2InvestigationPathTrace.current();
+                        if (t != null) {
+                            Object err = rs.executionMeta() != null
+                                    ? rs.executionMeta().get("error." + spec.key()) : null;
+                            if (err != null) {
+                                t.addBigQueryError(spec.key(), spec.sql(), String.valueOf(err));
+                            } else {
+                                t.step("warehouse_empty",
+                                        "key=" + spec.key() + " returned no QueryResult (possible silent BQ failure)");
+                            }
+                        }
+                    }
+                } catch (Exception ex) {
+                    Phase2InvestigationPathTrace t = Phase2InvestigationPathTrace.current();
+                    if (t != null) {
+                        t.addBigQueryError(spec.key(), spec.sql(), ex.getMessage());
+                        t.setException(ex);
+                    }
+                    log.error("[sql-exec] non-template batch query FAILED key={} error={}",
+                            spec.key(), ex.getMessage(), ex);
+                    throw ex;
                 }
             }
         }
         return results;
+    }
+
+    private void recordComputationMetaErrors(QuerySpec spec, ComputationResultSet rs) {
+        if (rs == null || rs.executionMeta() == null) {
+            return;
+        }
+        Phase2InvestigationPathTrace t = Phase2InvestigationPathTrace.current();
+        if (t == null) {
+            return;
+        }
+        Object err = rs.executionMeta().get("error." + spec.key());
+        Object failedSql = rs.executionMeta().get("failed_sql." + spec.key());
+        if (err != null) {
+            t.addBigQueryError(
+                    spec.key(),
+                    failedSql != null ? String.valueOf(failedSql) : spec.sql(),
+                    String.valueOf(err));
+            log.warn("[sql-exec] investigation/non-tpl query failed silently in warehouse executor key={} error={}",
+                    spec.key(), err);
+        }
+        for (Map.Entry<String, Object> e : rs.executionMeta().entrySet()) {
+            if (e.getKey() != null && e.getKey().startsWith("error.") && !e.getKey().equals("error." + spec.key())) {
+                String key = e.getKey().substring("error.".length());
+                Object sql = rs.executionMeta().get("failed_sql." + key);
+                t.addBigQueryError(key, sql != null ? String.valueOf(sql) : null, String.valueOf(e.getValue()));
+            }
+        }
     }
 
     private QueryResult executeWithFallbacksAndDiagnostics(

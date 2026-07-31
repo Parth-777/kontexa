@@ -102,6 +102,7 @@ public class ReportGenerationAgent {
 
         AgentReportEntity report = new AgentReportEntity();
         report.setClientId(clientId);
+        com.example.BACKEND.tenancy.TenantIdBinder.bind(report::setTenantId);
         report.setPeriodType(periodType);
         report.setPeriodLabel(periodLabel);
         report.setContent(content);

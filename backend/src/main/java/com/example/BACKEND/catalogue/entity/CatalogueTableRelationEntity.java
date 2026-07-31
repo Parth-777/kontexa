@@ -22,6 +22,9 @@ public class CatalogueTableRelationEntity {
     @Column(name = "client_id", nullable = false)
     private String clientId;
 
+    @Column(name = "tenant_id")
+    private java.util.UUID tenantId;
+
     @Column(name = "fact_table", nullable = false)
     private String factTable;
 
@@ -50,6 +53,8 @@ public class CatalogueTableRelationEntity {
     public Long          getId()                        { return id; }
     public String        getClientId()                  { return clientId; }
     public void          setClientId(String s)          { this.clientId = s; }
+    public java.util.UUID getTenantId()                 { return tenantId; }
+    public void          setTenantId(java.util.UUID u)  { this.tenantId = u; }
     public String        getFactTable()                 { return factTable; }
     public void          setFactTable(String s)         { this.factTable = s; }
     public String        getFactTableSchema()           { return factTableSchema; }

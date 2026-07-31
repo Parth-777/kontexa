@@ -13,6 +13,7 @@ import com.example.BACKEND.catalogue.decision.presentation.executive.strategy.Ra
 import com.example.BACKEND.catalogue.decision.presentation.executive.strategy.ScalarPresentation;
 import com.example.BACKEND.catalogue.decision.presentation.executive.strategy.TrendPresentation;
 import com.example.BACKEND.catalogue.decision.presentation.executive.strategy.VariancePresentation;
+import com.example.BACKEND.catalogue.charts.ChartSpec;
 import com.example.BACKEND.catalogue.semantic.canonical.CanonicalQueryModel;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,6 +24,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ExecutivePresentationBuilderTest {
@@ -196,6 +198,73 @@ class ExecutivePresentationBuilderTest {
         assertTrue(presentation.insights().stream()
                 .anyMatch(i -> i.contains("denominator could not be computed")));
         assertFalse(presentation.toMap().toString().toLowerCase().contains("nan"));
+    }
+
+    @Test
+    void nestedSemanticPathsBindWarehouseSqlAliasesIntoTableAndChart() {
+        // Warehouse returns SQL SELECT aliases; CQM still uses catalogue leaf paths.
+        CanonicalQueryModel model = new CanonicalQueryModel(
+                new CanonicalQueryModel.MeasureSpec("totals.visits", "SUM"),
+                new CanonicalQueryModel.PartitionSpec("trafficSource.source", null),
+                List.of(),
+                null,
+                null,
+                new CanonicalQueryModel.OrderSpec("totals.visits", "DESC"),
+                1,
+                new CanonicalQueryModel.PlannerMetadata(
+                        "RANKING", 0.9, "", List.of("trafficSource.source"), null, null));
+
+        List<Map<String, Object>> warehouseRows = List.of(
+                Map.of("source", "(direct)", "visits", 872));
+
+        ExecutivePresentation presentation = builder.build(model, warehouseRows);
+
+        assertEquals("RANKING", presentation.type());
+        assertTrue(presentation.table().hasContent());
+        assertEquals(1, presentation.table().rows().size());
+        assertEquals("(direct)", presentation.table().rows().getFirst().get("segment"));
+        assertFalse(presentation.table().rows().getFirst().get("value").contains("—"));
+        assertTrue(presentation.table().rows().getFirst().get("value").contains("872")
+                || presentation.table().rows().getFirst().get("value").contains("872.0"));
+
+        ChartSpec chart = builder.toChartSpec(presentation, warehouseRows);
+        assertNotNull(chart);
+        assertFalse(chart.getData().isEmpty());
+        assertEquals("(direct)", chart.getData().getFirst().get("trafficSource.source"));
+        assertEquals(872, ((Number) chart.getData().getFirst().get("totals.visits")).intValue());
+    }
+
+    @Test
+    void deviceCategoryVisitsAliasesPopulateDistributionTableAndShare() {
+        CanonicalQueryModel model = new CanonicalQueryModel(
+                new CanonicalQueryModel.MeasureSpec("totals.visits", "SUM"),
+                new CanonicalQueryModel.PartitionSpec("device.deviceCategory", null),
+                List.of(),
+                null,
+                null,
+                null,
+                null,
+                new CanonicalQueryModel.PlannerMetadata(
+                        "DISTRIBUTION", 0.9, "", List.of("device.deviceCategory"), null, null));
+
+        List<Map<String, Object>> warehouseRows = List.of(
+                Map.of("deviceCategory", "desktop", "visits", 1412),
+                Map.of("deviceCategory", "mobile", "visits", 250),
+                Map.of("deviceCategory", "tablet", "visits", 49));
+
+        ExecutivePresentation presentation = builder.build(model, warehouseRows);
+
+        assertEquals("DISTRIBUTION", presentation.type());
+        assertEquals(3, presentation.table().rows().size());
+        assertEquals("desktop", presentation.table().rows().getFirst().get("segment"));
+        assertFalse(presentation.table().rows().getFirst().get("value").contains("—"));
+        assertTrue(presentation.table().columns().stream().anyMatch(c -> "share_pct".equals(c.key())));
+        assertFalse(presentation.table().rows().getFirst().get("share_pct").contains("—"));
+
+        ChartSpec chart = builder.toChartSpec(presentation, warehouseRows);
+        assertNotNull(chart);
+        assertEquals(3, chart.getData().size());
+        assertEquals(1412, ((Number) chart.getData().getFirst().get("totals.visits")).intValue());
     }
 
     @Test

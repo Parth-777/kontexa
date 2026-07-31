@@ -25,7 +25,6 @@ public class PasswordResetService {
     private final AuditService audit;
 
     private final int resetTtlHours;
-    private final String frontendBaseUrl;
 
     public PasswordResetService(
             JdbcTemplate jdbc,
@@ -33,8 +32,7 @@ public class PasswordResetService {
             TokenHasher tokenHasher,
             PasswordService passwords,
             AuditService audit,
-            @Value("${kontexa.auth.password-reset.ttl-hours:24}") int resetTtlHours,
-            @Value("${kontexa.auth.frontend-base-url:http://localhost:3000}") String frontendBaseUrl
+            @Value("${kontexa.auth.password-reset.ttl-hours:24}") int resetTtlHours
     ) {
         this.jdbc = jdbc;
         this.identities = identities;
@@ -42,7 +40,6 @@ public class PasswordResetService {
         this.passwords = passwords;
         this.audit = audit;
         this.resetTtlHours = resetTtlHours;
-        this.frontendBaseUrl = frontendBaseUrl;
     }
 
     public boolean isEnabled() {
@@ -75,9 +72,9 @@ public class PasswordResetService {
         audit.log(identity.workspaceId(), identity.id(), AuditService.PASSWORD_RESET,
                 "reset_requested email=" + identity.email(), ipAddress, userAgent);
 
+        // Never return the raw token or reset link in the API response.
         return Optional.of(Map.of(
-                "message", "If the account exists, a reset link has been generated.",
-                "resetLink", frontendBaseUrl + "/reset-password?token=" + rawToken
+                "message", "If the account exists, a reset link has been generated."
         ));
     }
 

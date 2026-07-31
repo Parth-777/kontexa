@@ -6,6 +6,12 @@ CREATE TABLE IF NOT EXISTS client_catalogues (
     database_name TEXT,
     schema_name   TEXT        NOT NULL,
     status        TEXT        NOT NULL DEFAULT 'DRAFT',
+    -- Versioning / semantic curriculum (nullable until populated)
+    lineage_key              TEXT,
+    supersedes_catalogue_id  BIGINT,
+    business_profile         TEXT,
+    global_caveats           TEXT,
+    entities_json            TEXT,
     created_at    TIMESTAMP   NOT NULL DEFAULT now(),
     updated_at    TIMESTAMP   NOT NULL DEFAULT now()
 );
@@ -35,7 +41,8 @@ CREATE TABLE IF NOT EXISTS catalogue_columns (
     is_sensitive    BOOLEAN   NOT NULL DEFAULT false,
     is_enriched     BOOLEAN   NOT NULL DEFAULT false,
     is_skipped      BOOLEAN   NOT NULL DEFAULT false,
-    skip_reason     TEXT
+    skip_reason     TEXT,
+    confidence      DOUBLE PRECISION
 );
 
 CREATE TABLE IF NOT EXISTS tenant_credentials (

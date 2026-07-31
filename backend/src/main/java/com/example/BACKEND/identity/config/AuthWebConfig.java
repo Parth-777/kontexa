@@ -3,6 +3,7 @@ package com.example.BACKEND.identity.config;
 import com.example.BACKEND.identity.auth.AuthInterceptor;
 import com.example.BACKEND.identity.auth.ForbiddenException;
 import com.example.BACKEND.identity.auth.UnauthorizedException;
+import com.example.BACKEND.tenancy.MissingTenantContextException;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -31,6 +32,11 @@ public class AuthWebConfig implements WebMvcConfigurer {
     static class AuthExceptionHandler {
         @ExceptionHandler(UnauthorizedException.class)
         public ResponseEntity<Map<String, String>> unauthorized(UnauthorizedException ex) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", ex.getMessage()));
+        }
+
+        @ExceptionHandler(MissingTenantContextException.class)
+        public ResponseEntity<Map<String, String>> missingTenant(MissingTenantContextException ex) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", ex.getMessage()));
         }
 

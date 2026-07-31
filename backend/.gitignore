@@ -4,6 +4,16 @@ target/
 !**/src/main/**/target/
 !**/src/test/**/target/
 
+### Secrets (never commit) ###
+.env
+.env.*
+!.env.example
+**/application-local.properties
+!**/application-local.properties.example
+**/application-secrets.properties
+!**/application-secrets.properties.example
+config/application-secrets.properties
+
 ### STS ###
 .apt_generated
 .classpath

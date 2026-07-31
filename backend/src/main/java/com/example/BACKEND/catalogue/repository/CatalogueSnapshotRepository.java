@@ -7,13 +7,18 @@ import org.springframework.stereotype.Repository;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 @Repository
 public interface CatalogueSnapshotRepository extends JpaRepository<CatalogueSnapshotEntity, Long> {
 
     Optional<CatalogueSnapshotEntity> findByClientId(String clientId);
 
+    Optional<CatalogueSnapshotEntity> findByTenantId(UUID tenantId);
+
     void deleteByClientId(String clientId);
+
+    void deleteByTenantId(UUID tenantId);
 
     @Query("select s.clientId from CatalogueSnapshotEntity s order by s.clientId asc")
     List<String> findAllClientIds();

@@ -187,6 +187,7 @@ public class StarSchemaDetector {
 
                 CatalogueTableRelationEntity rel = new CatalogueTableRelationEntity();
                 rel.setClientId(clientId);
+                com.example.BACKEND.tenancy.TenantIdBinder.bind(rel::setTenantId);
                 rel.setFactTable(fact.getTableName());
                 rel.setFactTableSchema(fact.getTableSchema());
                 rel.setDimensionTable(match.getTableName());

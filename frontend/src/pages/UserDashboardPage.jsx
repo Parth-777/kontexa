@@ -405,12 +405,21 @@ function DecisionInsightMessage({ msg }) {
   const correlationAnalysis = d.correlation_analysis || null;
   const semanticShadow = d.semantic_shadow || null;
   const semanticPlanner = d.semantic_planner || null;
+  const investigation = d.investigation || null;
+  const investigationRequests = investigation?.evidence_requests || [];
+  const investigationCharts = Array.isArray(investigation?.charts)
+    ? investigation.charts
+        .map((c) => c?.chart)
+        .filter((c) => c?.type && Array.isArray(c.data) && c.data.length > 0)
+    : [];
+  const evidenceValidation = investigation?.evidence_validation || null;
   const gptServed = semanticPlanner?.served_path === 'gpt'
     || executionPath?.served_path === 'gpt';
   const isCorrelation = analysisType === 'CORRELATION_RESULT'
     || analysisType === 'CORRELATION'
     || correlationAnalysis != null;
   const showActions = !recoveryMode && confidenceLabel === 'High confidence' && (d.actions?.length > 0);
+  const evidenceRefs = Array.isArray(d.evidenceRefs) ? d.evidenceRefs : [];
 
   const showPresentationTable = !isCorrelation && presentationTable?.rows?.length > 0;
   const showTable = !isCorrelation
@@ -602,6 +611,27 @@ function DecisionInsightMessage({ msg }) {
           </div>
         )}
 
+        {!showChart && investigationCharts.length > 0 && (
+          <div className="di-chart-block">
+            {investigationCharts[0].title && (
+              <p className="di-chart-title">{investigationCharts[0].title}</p>
+            )}
+            <ChartRenderer spec={investigationCharts[0]} />
+          </div>
+        )}
+
+        {investigationCharts.length > 1 && (
+          <div className="di-section">
+            <p className="di-section-label">ADDITIONAL EVIDENCE CHARTS</p>
+            {investigationCharts.slice(1).map((c, i) => (
+              <div key={c.title || i} className="di-chart-block" style={{ marginTop: 12 }}>
+                {c.title && <p className="di-chart-title">{c.title}</p>}
+                <ChartRenderer spec={c} />
+              </div>
+            ))}
+          </div>
+        )}
+
         {activeTableSpec && <TableRenderer spec={activeTableSpec} />}
 
         {presentation?.insights?.length > 0 && (
@@ -622,6 +652,56 @@ function DecisionInsightMessage({ msg }) {
             <ol className="di-list di-list--actions">
               {d.actions.slice(0, 3).map((a, i) => <li key={i}>{a}</li>)}
             </ol>
+          </div>
+        )}
+
+        {investigationRequests.length > 0 && (
+          <div className="di-section">
+            <p className="di-section-label">INVESTIGATION EVIDENCE</p>
+            {investigation?.coverage && (
+              <p className="di-evidence-basis">
+                {investigation.coverage.requests_succeeded ?? 0}/
+                {investigation.coverage.requests_planned ?? investigationRequests.length}
+                {' '}requests succeeded
+                {investigation.coverage.requests_failed
+                  ? ` · ${investigation.coverage.requests_failed} failed`
+                  : ''}
+              </p>
+            )}
+            {evidenceValidation && (
+              <p className="di-evidence-basis">
+                Evidence validation: {evidenceValidation.ok ? 'passed' : 'issues found'}
+                {evidenceValidation.issues_found != null
+                  ? ` · ${evidenceValidation.issues_found} issue(s)`
+                  : ''}
+              </p>
+            )}
+            <ul className="di-list di-list--findings">
+              {investigationRequests.map((req) => (
+                <li key={req.request_id}>
+                  <strong>{req.request_id}</strong> [{req.kind}]
+                  {req.role ? ` role=${req.role}` : ''}
+                  {req.ok === false ? ' · FAILED' : ''}
+                  {req.error ? ` · ${req.error}` : ''}
+                  {req.ok !== false && req.row_count != null ? ` · ${req.row_count} rows` : ''}
+                  {Array.isArray(req.query_ids) && req.query_ids.length > 0
+                    ? ` · queries: ${req.query_ids.join(', ')}`
+                    : ''}
+                  {req.sql ? (
+                    <pre className="sql-debug-entry__sql" style={{ marginTop: 6 }}>{req.sql}</pre>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {evidenceRefs.length > 0 && (
+          <div className="di-section">
+            <p className="di-section-label">EVIDENCE REQUESTS</p>
+            <ul className="di-list di-list--findings">
+              {evidenceRefs.map((ref, i) => <li key={`${ref}-${i}`}>{ref}</li>)}
+            </ul>
           </div>
         )}
 

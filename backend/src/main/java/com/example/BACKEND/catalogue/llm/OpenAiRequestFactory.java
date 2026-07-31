@@ -29,12 +29,21 @@ public class OpenAiRequestFactory {
             String systemPrompt,
             String userPrompt
     ) {
-        // logical options (actual fields are model-shaped by RequestParameterMapper)
+        return buildChatCompletionsBody(model, profile, systemPrompt, userPrompt, 4096);
+    }
+
+    public ObjectNode buildChatCompletionsBody(
+            String model,
+            ModelCapabilityProfile profile,
+            String systemPrompt,
+            String userPrompt,
+            int maxTokens
+    ) {
         ChatRequestOptions opts = new ChatRequestOptions(
-                0.1,          // temperature (only applied if supported)
+                0.1,
                 "json_object",
-                4096,         // translated to max_tokens or max_completion_tokens
-                "medium"      // reasoning_effort (only applied if supported)
+                Math.max(256, maxTokens),
+                "medium"
         );
 
         ObjectNode body = objectMapper.createObjectNode();
@@ -42,7 +51,6 @@ public class OpenAiRequestFactory {
 
         mapper.apply(body, profile, opts);
 
-        // Messages: some reasoning models reject role="system"
         ArrayNode messages = objectMapper.createArrayNode();
         if (profile.supportsSystemRole()) {
             ObjectNode sys = objectMapper.createObjectNode();
@@ -55,7 +63,6 @@ public class OpenAiRequestFactory {
             usr.put("content", userPrompt);
             messages.add(usr);
         } else {
-            // Fallback: merge system instructions into the user content
             ObjectNode usr = objectMapper.createObjectNode();
             usr.put("role", "user");
             usr.put("content", systemPrompt + "\n\n" + userPrompt);

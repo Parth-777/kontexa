@@ -1,8 +1,11 @@
 package com.example.BACKEND.tenant;
 
+import com.example.BACKEND.identity.connector.WorkspaceConnectorService;
+import com.example.BACKEND.tenancy.TenantContext;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -19,17 +22,26 @@ public class TenantAuthController {
     private final BigQueryConnectorService bigQueryConnectorService;
     private final SnowflakeConnectorService snowflakeConnectorService;
     private final ObjectMapper objectMapper;
+    private final TenantContextResolver tenantContextResolver;
+    private final TenantCloudConnectionService cloudConnectionService;
+    private final WorkspaceConnectorService workspaceConnectorService;
 
     public TenantAuthController(
             TenantAuthService tenantAuthService,
             BigQueryConnectorService bigQueryConnectorService,
             SnowflakeConnectorService snowflakeConnectorService,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            TenantContextResolver tenantContextResolver,
+            TenantCloudConnectionService cloudConnectionService,
+            WorkspaceConnectorService workspaceConnectorService
     ) {
         this.tenantAuthService = tenantAuthService;
         this.bigQueryConnectorService = bigQueryConnectorService;
         this.snowflakeConnectorService = snowflakeConnectorService;
         this.objectMapper = objectMapper;
+        this.tenantContextResolver = tenantContextResolver;
+        this.cloudConnectionService = cloudConnectionService;
+        this.workspaceConnectorService = workspaceConnectorService;
     }
 
     @PostMapping("/login")
@@ -54,15 +66,14 @@ public class TenantAuthController {
     }
 
     @GetMapping("/cloud-link")
-    public ResponseEntity<?> getCloudLink(@RequestParam String tenantId) {
-        if (tenantId == null || tenantId.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "tenantId is required"));
-        }
-
+    public ResponseEntity<?> getCloudLink(@RequestParam(required = false) String tenantId) {
+        TenantContext ctx = tenantContextResolver.resolveContext(null, tenantId);
         try {
-            return tenantAuthService.getCloudDbLink(tenantId)
+            return cloudConnectionService.getRawConfig(ctx.tenantId())
+                    .or(() -> cloudConnectionService.getRawConfigBySlug(ctx.legacyTenantKey()))
                     .<ResponseEntity<?>>map(link -> ResponseEntity.ok(Map.of(
-                            "tenantId", tenantId.trim(),
+                            "tenantId", ctx.legacyTenantKey(),
+                            "workspaceId", ctx.tenantId().toString(),
                             "cloudDbLink", link
                     )))
                     .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND)
@@ -74,19 +85,33 @@ public class TenantAuthController {
     }
 
     @PutMapping("/cloud-link")
-    public ResponseEntity<?> updateCloudLink(@RequestBody Map<String, String> body) {
-        String tenantId = body.get("tenantId");
+    public ResponseEntity<?> updateCloudLink(
+            @RequestBody Map<String, String> body,
+            HttpServletRequest request
+    ) {
+        TenantContext ctx = tenantContextResolver.resolveContext(null, body);
         String cloudDbLink = body.get("cloudDbLink");
 
-        if (tenantId == null || tenantId.isBlank() || cloudDbLink == null || cloudDbLink.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "tenantId and cloudDbLink are required"));
+        if (cloudDbLink == null || cloudDbLink.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "cloudDbLink is required"));
         }
 
         try {
-            tenantAuthService.updateCloudDbLink(tenantId, cloudDbLink);
+            String warehouseType = workspaceConnectorService.detectProvider(cloudDbLink);
+            if (warehouseType == null || warehouseType.isBlank()) {
+                warehouseType = "BIGQUERY";
+            }
+            cloudConnectionService.saveRawConfig(
+                    ctx.tenantId(),
+                    warehouseType.toUpperCase(),
+                    cloudDbLink,
+                    request.getRemoteAddr(),
+                    request.getHeader("User-Agent")
+            );
             return ResponseEntity.ok(Map.of(
                     "message", "Cloud database link updated",
-                    "tenantId", tenantId.trim(),
+                    "tenantId", ctx.legacyTenantKey(),
+                    "workspaceId", ctx.tenantId().toString(),
                     "cloudDbLink", cloudDbLink.trim()
             ));
         } catch (IllegalArgumentException ex) {
@@ -122,11 +147,11 @@ public class TenantAuthController {
     }
 
     @PostMapping("/bigquery/connect")
-    public ResponseEntity<?> connectBigQuery(@RequestBody Map<String, Object> body) {
-        String tenantId = getAsString(body, "tenantId");
-        if (tenantId == null || tenantId.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "tenantId is required"));
-        }
+    public ResponseEntity<?> connectBigQuery(
+            @RequestBody Map<String, Object> body,
+            HttpServletRequest request
+    ) {
+        TenantContext ctx = tenantContextResolver.resolveContext(null, body);
 
         try {
             BigQueryConnectorService.BigQueryTestResult result = bigQueryConnectorService.testConnection(
@@ -144,11 +169,14 @@ public class TenantAuthController {
                     result.connectionLink(),
                     serviceAccountJson
             );
-            tenantAuthService.updateCloudDbLink(tenantId, configJson);
+            cloudConnectionService.saveRawConfig(
+                    ctx.tenantId(), "BIGQUERY", configJson,
+                    request.getRemoteAddr(), request.getHeader("User-Agent"));
 
             return ResponseEntity.ok(Map.of(
                     "message", "BigQuery connection verified and saved",
-                    "tenantId", tenantId.trim(),
+                    "tenantId", ctx.legacyTenantKey(),
+                    "workspaceId", ctx.tenantId().toString(),
                     "cloudDbLink", result.connectionLink(),
                     "provider", "bigquery",
                     "projectId", result.projectId(),
@@ -164,12 +192,11 @@ public class TenantAuthController {
     }
 
     @GetMapping("/bigquery/config")
-    public ResponseEntity<?> getBigQueryConfig(@RequestParam String tenantId) {
-        if (tenantId == null || tenantId.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "tenantId is required"));
-        }
+    public ResponseEntity<?> getBigQueryConfig(@RequestParam(required = false) String tenantId) {
+        TenantContext ctx = tenantContextResolver.resolveContext(null, tenantId);
         try {
-            return tenantAuthService.getCloudDbLink(tenantId)
+            return cloudConnectionService.getRawConfig(ctx.tenantId())
+                    .or(() -> cloudConnectionService.getRawConfigBySlug(ctx.legacyTenantKey()))
                     .<ResponseEntity<?>>map(this::toBigQueryConfigResponse)
                     .orElseGet(() -> ResponseEntity.ok(Map.of(
                             "connected", false,
@@ -182,12 +209,11 @@ public class TenantAuthController {
     }
 
     @GetMapping("/bigquery/tables")
-    public ResponseEntity<?> listBigQueryTables(@RequestParam String tenantId) {
-        if (tenantId == null || tenantId.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "tenantId is required"));
-        }
+    public ResponseEntity<?> listBigQueryTables(@RequestParam(required = false) String tenantId) {
+        TenantContext ctx = tenantContextResolver.resolveContext(null, tenantId);
         try {
-            Optional<String> rawConfigOpt = tenantAuthService.getCloudDbLink(tenantId);
+            Optional<String> rawConfigOpt = cloudConnectionService.getRawConfig(ctx.tenantId())
+                    .or(() -> cloudConnectionService.getRawConfigBySlug(ctx.legacyTenantKey()));
             if (rawConfigOpt.isEmpty() || rawConfigOpt.get().isBlank()) {
                 return ResponseEntity.status(HttpStatus.NOT_FOUND)
                         .body(Map.of("error", "No BigQuery connector configured for this tenant"));
@@ -245,11 +271,11 @@ public class TenantAuthController {
     }
 
     @PostMapping("/snowflake/connect")
-    public ResponseEntity<?> connectSnowflake(@RequestBody Map<String, Object> body) {
-        String tenantId = getAsString(body, "tenantId");
-        if (tenantId == null || tenantId.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "tenantId is required"));
-        }
+    public ResponseEntity<?> connectSnowflake(
+            @RequestBody Map<String, Object> body,
+            HttpServletRequest request
+    ) {
+        TenantContext ctx = tenantContextResolver.resolveContext(null, body);
         try {
             SnowflakeConnectorService.SnowflakeTestResult result = snowflakeConnectorService.testConnection(
                     getAsString(body, "account"),
@@ -268,10 +294,13 @@ public class TenantAuthController {
                     getAsString(body, "password"),
                     result.connectionLink()
             );
-            tenantAuthService.updateCloudDbLink(tenantId, configJson);
+            cloudConnectionService.saveRawConfig(
+                    ctx.tenantId(), "SNOWFLAKE", configJson,
+                    request.getRemoteAddr(), request.getHeader("User-Agent"));
             return ResponseEntity.ok(Map.of(
                     "message",            "Snowflake connection verified and saved",
-                    "tenantId",           tenantId.trim(),
+                    "tenantId",           ctx.legacyTenantKey(),
+                    "workspaceId",        ctx.tenantId().toString(),
                     "provider",           "snowflake",
                     "account",            result.account(),
                     "warehouse",          result.warehouse(),
@@ -288,12 +317,11 @@ public class TenantAuthController {
     }
 
     @GetMapping("/snowflake/config")
-    public ResponseEntity<?> getSnowflakeConfig(@RequestParam String tenantId) {
-        if (tenantId == null || tenantId.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "tenantId is required"));
-        }
+    public ResponseEntity<?> getSnowflakeConfig(@RequestParam(required = false) String tenantId) {
+        TenantContext ctx = tenantContextResolver.resolveContext(null, tenantId);
         try {
-            return tenantAuthService.getCloudDbLink(tenantId)
+            return cloudConnectionService.getRawConfig(ctx.tenantId())
+                    .or(() -> cloudConnectionService.getRawConfigBySlug(ctx.legacyTenantKey()))
                     .<ResponseEntity<?>>map(this::toSnowflakeConfigResponse)
                     .orElseGet(() -> ResponseEntity.ok(Map.of("connected", false, "provider", "snowflake")));
         } catch (IllegalStateException ex) {
@@ -302,12 +330,11 @@ public class TenantAuthController {
     }
 
     @GetMapping("/snowflake/tables")
-    public ResponseEntity<?> listSnowflakeTables(@RequestParam String tenantId) {
-        if (tenantId == null || tenantId.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "tenantId is required"));
-        }
+    public ResponseEntity<?> listSnowflakeTables(@RequestParam(required = false) String tenantId) {
+        TenantContext ctx = tenantContextResolver.resolveContext(null, tenantId);
         try {
-            Optional<String> rawConfigOpt = tenantAuthService.getCloudDbLink(tenantId);
+            Optional<String> rawConfigOpt = cloudConnectionService.getRawConfig(ctx.tenantId())
+                    .or(() -> cloudConnectionService.getRawConfigBySlug(ctx.legacyTenantKey()));
             if (rawConfigOpt.isEmpty() || rawConfigOpt.get().isBlank()) {
                 return ResponseEntity.status(HttpStatus.NOT_FOUND)
                         .body(Map.of("error", "No Snowflake connector configured for this tenant"));

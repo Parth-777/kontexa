@@ -49,13 +49,17 @@ public class CatalogueColumnEntity {
     private String avgValue;
 
     /**
-     * Semantic enrichment fields — populated by CatalogueSemanticEnricher at approval time.
+     * Semantic enrichment fields — populated at generate and/or approve time.
      * SUM | COUNT | AVG | LAST_VALUE | NONE
      */
     @Column(name = "aggregation_method")
     private String aggregationMethod;
 
-    /** One-sentence plain-English description of what this column measures in a business context. */
+    /**
+     * Primary semantic knowledge for future GPT/Claude reasoning.
+     * Rich analyst-style explanation of the field (single source of truth for meaning).
+     * {@code description} remains the short human-readable summary.
+     */
     @Column(name = "business_meaning", columnDefinition = "TEXT")
     private String businessMeaning;
 
@@ -66,6 +70,10 @@ public class CatalogueColumnEntity {
     /** For date/time columns: daily | weekly | monthly | event | N/A */
     @Column(name = "date_granularity")
     private String dateGranularity;
+
+    /** 0–1 confidence in semantic enrichment; null if unknown. */
+    @Column(name = "confidence")
+    private Double confidence;
 
     @Column(name = "is_sensitive", nullable = false)
     private boolean sensitive = false;
@@ -112,6 +120,8 @@ public class CatalogueColumnEntity {
     public void   setComparisonPeriod(String s)          { this.comparisonPeriod = s; }
     public String getDateGranularity()                   { return dateGranularity; }
     public void   setDateGranularity(String s)           { this.dateGranularity = s; }
+    public Double getConfidence()                        { return confidence; }
+    public void   setConfidence(Double confidence)       { this.confidence = confidence; }
     public boolean isSensitive()                         { return sensitive; }
     public void    setSensitive(boolean b)               { this.sensitive = b; }
     public boolean isEnriched()                          { return enriched; }

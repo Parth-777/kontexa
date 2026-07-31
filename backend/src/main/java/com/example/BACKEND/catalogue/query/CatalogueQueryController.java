@@ -10,6 +10,8 @@ import java.util.Map;
 
 /**
  * POST /api/query/ask — reasoning-first chatbot.
+ *
+ * Tenant ownership comes exclusively from the authenticated {@code TenantContext}.
  */
 @RestController
 @RequestMapping("/api/query")

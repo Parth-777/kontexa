@@ -53,16 +53,41 @@ public class OpenAiClient {
                 profile.supportsReasoningEffort());
     }
 
+    public String getModel() {
+        return model;
+    }
+
     /**
      * Sends a chat completion request shaped to the active model's capabilities.
-     *
-     * @param systemPrompt  Role/instruction context
-     * @param userPrompt    The analytical question or evidence payload
-     * @return              Raw text content from the model's response
      */
     public String chat(String systemPrompt, String userPrompt) {
+        return chat(systemPrompt, userPrompt, 4096);
+    }
+
+    /**
+     * @param maxTokens completion budget (catalogue enrichment needs a larger budget
+     *                  for rich businessMeaning prose across many columns)
+     */
+    public String chat(String systemPrompt, String userPrompt, int maxTokens) {
+        ChatCompletionResult result = chatDetailed(systemPrompt, userPrompt, maxTokens);
+        if (!result.hasContent()) {
+            throw new RuntimeException(
+                    result.errorMessage() != null
+                            ? result.errorMessage()
+                            : "OpenAI returned empty content | finish_reason=" + result.finishReason()
+                            + " | http=" + result.httpStatus());
+        }
+        return result.content();
+    }
+
+    /**
+     * Diagnostic-capable chat: always returns metadata even on HTTP/content failure.
+     * Does not throw for HTTP errors — callers inspect {@link ChatCompletionResult}.
+     */
+    public ChatCompletionResult chatDetailed(String systemPrompt, String userPrompt, int maxTokens) {
         try {
-            ObjectNode body = requestFactory.buildChatCompletionsBody(model, profile, systemPrompt, userPrompt);
+            ObjectNode body = requestFactory.buildChatCompletionsBody(
+                    model, profile, systemPrompt, userPrompt, maxTokens);
             String requestJson = objectMapper.writeValueAsString(body);
 
             HttpRequest request = HttpRequest.newBuilder()
@@ -70,32 +95,76 @@ public class OpenAiClient {
                     .header("Content-Type", "application/json")
                     .header("Authorization", "Bearer " + apiKey)
                     .POST(HttpRequest.BodyPublishers.ofString(requestJson))
-                    .timeout(Duration.ofSeconds(120))
+                    .timeout(Duration.ofSeconds(300))
                     .build();
 
-            System.out.println("[OpenAiClient] Calling OpenAI | model: " + model);
+            System.out.println("[OpenAiClient] Calling OpenAI | model: " + model
+                    + " | maxTokens=" + maxTokens
+                    + " | requestJsonChars=" + requestJson.length());
 
             HttpResponse<String> response = httpClient.send(
                     request, HttpResponse.BodyHandlers.ofString());
 
-            if (response.statusCode() != 200) {
-                throw new RuntimeException(
-                        "OpenAI API error: HTTP " + response.statusCode()
-                                + " | body: " + response.body());
+            int status = response.statusCode();
+            String rawBody = response.body() != null ? response.body() : "";
+
+            if (status != 200) {
+                System.out.println("[OpenAiClient] HTTP error " + status
+                        + " | bodyChars=" + rawBody.length()
+                        + " | bodyPreview=" + preview(rawBody, 800));
+                return new ChatCompletionResult(
+                        true, status, model, maxTokens,
+                        null, null, null, null, null,
+                        rawBody,
+                        "OpenAI API error: HTTP " + status + " | body: " + preview(rawBody, 2000)
+                );
             }
 
-            JsonNode json = objectMapper.readTree(response.body());
-            String content = json.path("choices").path(0)
-                    .path("message").path("content").asText();
+            JsonNode json = objectMapper.readTree(rawBody);
+            JsonNode choice0 = json.path("choices").path(0);
+            String content = choice0.path("message").path("content").asText(null);
+            String finishReason = choice0.path("finish_reason").asText(null);
+            JsonNode usage = json.path("usage");
+            Integer promptTokens = usage.path("prompt_tokens").isMissingNode()
+                    ? null : usage.path("prompt_tokens").asInt();
+            Integer completionTokens = usage.path("completion_tokens").isMissingNode()
+                    ? null : usage.path("completion_tokens").asInt();
+            Integer totalTokens = usage.path("total_tokens").isMissingNode()
+                    ? null : usage.path("total_tokens").asInt();
 
-            System.out.println("[OpenAiClient] Response received successfully");
-            return content;
+            System.out.println("[OpenAiClient] Response OK"
+                    + " | finish_reason=" + finishReason
+                    + " | contentChars=" + (content == null ? 0 : content.length())
+                    + " | prompt_tokens=" + promptTokens
+                    + " | completion_tokens=" + completionTokens
+                    + " | total_tokens=" + totalTokens);
+
+            return new ChatCompletionResult(
+                    true, status, model, maxTokens,
+                    content, finishReason,
+                    promptTokens, completionTokens, totalTokens,
+                    rawBody,
+                    null
+            );
 
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new RuntimeException("OpenAI request interrupted", e);
+            return new ChatCompletionResult(
+                    false, -1, model, maxTokens,
+                    null, null, null, null, null, null,
+                    "OpenAI request interrupted: " + e.getMessage()
+            );
         } catch (Exception e) {
-            throw new RuntimeException("OpenAI API call failed: " + e.getMessage(), e);
+            return new ChatCompletionResult(
+                    false, -1, model, maxTokens,
+                    null, null, null, null, null, null,
+                    "OpenAI API call failed: " + e.getMessage()
+            );
         }
+    }
+
+    private static String preview(String s, int max) {
+        if (s == null) return "";
+        return s.length() <= max ? s : s.substring(0, max) + "...";
     }
 }

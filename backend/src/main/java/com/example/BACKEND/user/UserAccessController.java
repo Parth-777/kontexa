@@ -3,6 +3,7 @@ package com.example.BACKEND.user;
 import com.example.BACKEND.tenant.BigQueryConnectorService;
 import com.example.BACKEND.tenant.SnowflakeConnectorService;
 import com.example.BACKEND.tenant.TenantCloudConnectionService;
+import com.example.BACKEND.tenant.TenantContextResolver;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -17,17 +18,20 @@ public class UserAccessController {
     private final TenantCloudConnectionService cloudConnectionService;
     private final BigQueryConnectorService bigQueryConnectorService;
     private final SnowflakeConnectorService snowflakeConnectorService;
+    private final TenantContextResolver tenantContextResolver;
 
     public UserAccessController(
             UserAccessService userAccessService,
             TenantCloudConnectionService cloudConnectionService,
             BigQueryConnectorService bigQueryConnectorService,
-            SnowflakeConnectorService snowflakeConnectorService
+            SnowflakeConnectorService snowflakeConnectorService,
+            TenantContextResolver tenantContextResolver
     ) {
         this.userAccessService = userAccessService;
         this.cloudConnectionService = cloudConnectionService;
         this.bigQueryConnectorService = bigQueryConnectorService;
         this.snowflakeConnectorService = snowflakeConnectorService;
+        this.tenantContextResolver = tenantContextResolver;
     }
 
     @PostMapping("/api/auth/user/login")
@@ -51,23 +55,21 @@ public class UserAccessController {
     }
 
     @GetMapping("/api/tenant/users")
-    public ResponseEntity<?> listUsers(@RequestParam String tenantId) {
-        if (tenantId == null || tenantId.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "tenantId is required"));
-        }
-        List<Map<String, Object>> users = userAccessService.listUsers(tenantId.trim());
+    public ResponseEntity<?> listUsers(@RequestParam(required = false) String tenantId) {
+        String resolvedTenantId = tenantContextResolver.resolveClientId(null, tenantId);
+        List<Map<String, Object>> users = userAccessService.listUsers(resolvedTenantId);
         return ResponseEntity.ok(Map.of("users", users));
     }
 
     @PostMapping("/api/tenant/users")
     public ResponseEntity<?> createUser(@RequestBody Map<String, Object> body) {
-        String tenantId = asString(body.get("tenantId"));
+        String tenantId = tenantContextResolver.resolveClientId(null, body);
         String userId = asString(body.get("userId"));
         String password = asString(body.get("password"));
         String position = asString(body.get("position"));
         boolean active = body.get("active") == null || Boolean.parseBoolean(String.valueOf(body.get("active")));
-        if (tenantId == null || userId == null || password == null) {
-            return ResponseEntity.badRequest().body(Map.of("error", "tenantId, userId, password are required"));
+        if (userId == null || password == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "userId and password are required"));
         }
         userAccessService.createUser(tenantId, userId, password, position == null ? "Viewer" : position, active);
         return ResponseEntity.ok(Map.of("message", "User created"));
@@ -75,13 +77,13 @@ public class UserAccessController {
 
     @PutMapping("/api/tenant/users/{userId}/role")
     public ResponseEntity<?> updateRole(@PathVariable String userId, @RequestBody Map<String, String> body) {
-        String tenantId = body.get("tenantId");
+        String tenantId = tenantContextResolver.resolveClientId(null, body);
         String position = body.get("position");
-        if (tenantId == null || tenantId.isBlank() || position == null || position.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "tenantId and position are required"));
+        if (position == null || position.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "position is required"));
         }
         try {
-            userAccessService.updateRole(tenantId.trim(), userId.trim(), position.trim());
+            userAccessService.updateRole(tenantId, userId.trim(), position.trim());
             return ResponseEntity.ok(Map.of("message", "Role updated"));
         } catch (IllegalArgumentException ex) {
             return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
@@ -90,8 +92,7 @@ public class UserAccessController {
 
     @PutMapping("/api/tenant/users/{userId}/status")
     public ResponseEntity<?> updateStatus(@PathVariable String userId, @RequestBody Map<String, Object> body) {
-        String tenantId = asString(body.get("tenantId"));
-        if (tenantId == null) return ResponseEntity.badRequest().body(Map.of("error", "tenantId is required"));
+        String tenantId = tenantContextResolver.resolveClientId(null, body);
         boolean active = Boolean.parseBoolean(String.valueOf(body.get("active")));
         try {
             userAccessService.updateStatus(tenantId, userId.trim(), active);
@@ -102,12 +103,12 @@ public class UserAccessController {
     }
 
     @DeleteMapping("/api/tenant/users/{userId}")
-    public ResponseEntity<?> deleteUser(@PathVariable String userId, @RequestParam String tenantId) {
-        if (tenantId == null || tenantId.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "tenantId is required"));
-        }
+    public ResponseEntity<?> deleteUser(
+            @PathVariable String userId,
+            @RequestParam(required = false) String tenantId) {
+        String resolvedTenantId = tenantContextResolver.resolveClientId(null, tenantId);
         try {
-            userAccessService.deleteUser(tenantId.trim(), userId.trim());
+            userAccessService.deleteUser(resolvedTenantId, userId.trim());
             return ResponseEntity.ok(Map.of("message", "User deleted"));
         } catch (IllegalArgumentException ex) {
             return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
@@ -116,16 +117,16 @@ public class UserAccessController {
 
     @GetMapping("/api/user/tables")
     public ResponseEntity<?> listTables(
-            @RequestParam String schema,
+            @RequestParam(required = false) String schema,
             @RequestParam(required = false) String tenantId
     ) {
-        if (schema == null || schema.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "schema is required"));
+        // Tenant authority from session only. schema/tenantId query hints are mismatch-checked.
+        String resolvedTenantId = tenantContextResolver.resolveClientId(null, tenantId);
+        if (schema != null && !schema.isBlank()
+                && !schema.trim().equalsIgnoreCase(resolvedTenantId)
+                && !"public".equalsIgnoreCase(schema.trim())) {
+            tenantContextResolver.assertHintMatches(resolvedTenantId, schema);
         }
-
-        // Resolve which tenant to check for cloud connector:
-        // prefer explicit tenantId param, fall back to schema (they are the same by convention)
-        String resolvedTenantId = (tenantId != null && !tenantId.isBlank()) ? tenantId.trim() : schema.trim();
         String provider = cloudConnectionService.getProvider(resolvedTenantId);
 
         try {
@@ -157,8 +158,8 @@ public class UserAccessController {
                 }
             }
 
-            // Fallback: local PostgreSQL schema
-            List<String> tables = userAccessService.listTablesForSchema(schema.trim());
+            // Local PostgreSQL: list schema named after authenticated tenant key (not client schema spoof).
+            List<String> tables = userAccessService.listTablesForSchema(resolvedTenantId);
             return ResponseEntity.ok(Map.of("tables", tables, "source", "postgres"));
 
         } catch (Exception ex) {

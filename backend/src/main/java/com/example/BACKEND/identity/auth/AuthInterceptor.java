@@ -1,6 +1,9 @@
 package com.example.BACKEND.identity.auth;
 
 import com.example.BACKEND.identity.session.SessionService;
+import com.example.BACKEND.tenancy.MissingTenantContextException;
+import com.example.BACKEND.tenancy.TenantContext;
+import com.example.BACKEND.tenancy.TenantContextHolder;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -14,8 +17,10 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * Authentication middleware — validates Bearer session tokens.
- * Authorization (role checks) is handled separately in controllers/services.
+ * Authentication middleware — validates Bearer session tokens and resolves
+ * {@link TenantContext} once per request.
+ *
+ * All {@code /api/**} routes are fail-closed except explicitly public auth/onboarding paths.
  */
 @Component
 public class AuthInterceptor implements HandlerInterceptor {
@@ -27,27 +32,12 @@ public class AuthInterceptor implements HandlerInterceptor {
             "/api/onboarding",
             "/api/auth/tenant/login",
             "/api/auth/user/login",
-            "/api/admin/identity/migrate",
-            // MCP handoff: code redemption is server-to-server (no Bearer). NOTE:
-            // /api/auth/mcp/complete is deliberately NOT public — it requires the
-            // freshly issued session token.
             "/api/auth/mcp/exchange"
     );
 
-    /** Invite validate/accept are public; create/resend/revoke require admin session. */
     private static final Set<String> PUBLIC_EXACT_OR_PREFIX = Set.of(
             "/api/auth/invites/validate",
             "/api/auth/invites/accept"
-    );
-
-    /**
-     * Tenant-scoped APIs that MUST fail closed: a valid, non-revoked,
-     * non-expired session is mandatory. No fail-open / backward-compat bypass
-     * applies to these paths, because tenant isolation depends on a trusted
-     * {@link AuthContext}.
-     */
-    private static final Set<String> TENANT_SCOPED_PREFIXES = Set.of(
-            "/api/decision/"
     );
 
     private final SessionService sessions;
@@ -62,16 +52,23 @@ public class AuthInterceptor implements HandlerInterceptor {
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler)
             throws Exception {
         String path = request.getRequestURI();
-        if ("OPTIONS".equalsIgnoreCase(request.getMethod())) return true;
+        if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
+            return true;
+        }
 
         boolean publicPath = isPublic(path);
-        boolean tenantScoped = isTenantScoped(path);
         String token = extractBearer(request);
 
-        // Fail-closed enforcement for tenant-scoped APIs (e.g. /api/decision/**):
-        // a valid session is mandatory. Missing/invalid/expired/revoked token, or
-        // sessions not enabled, all result in 401 — never a permissive bypass.
-        if (tenantScoped) {
+        if (publicPath) {
+            if (token != null && sessions.isEnabled()) {
+                // Best-effort bind for public paths that still benefit from context when present.
+                bindAuthenticatedContext(token, response, false);
+            }
+            return true;
+        }
+
+        // Fail-closed: every non-public /api/** requires a valid session + TenantContext.
+        if (path.startsWith("/api/")) {
             if (token == null) {
                 writeUnauthorized(response, "Authentication required");
                 return false;
@@ -80,53 +77,60 @@ public class AuthInterceptor implements HandlerInterceptor {
                 writeUnauthorized(response, "Authentication required");
                 return false;
             }
-            Optional<AuthContext> ctx = sessions.resolveAccessToken(token);
-            if (ctx.isEmpty()) {
+            return bindAuthenticatedContext(token, response, true);
+        }
+
+        // Non-API paths (e.g. actuator already public): allow.
+        return true;
+    }
+
+    /**
+     * Resolves AuthContext + TenantContext once. Fail closed when the session is
+     * present but TenantContext cannot be built.
+     */
+    private boolean bindAuthenticatedContext(
+            String token,
+            HttpServletResponse response,
+            boolean rejectInvalid
+    ) throws Exception {
+        Optional<AuthContext> ctx = sessions.resolveAccessToken(token);
+        if (ctx.isEmpty()) {
+            if (rejectInvalid) {
                 writeUnauthorized(response, "Invalid or expired session");
                 return false;
             }
+            return true;
+        }
+        try {
+            TenantContext tenantContext = TenantContext.fromAuthContext(ctx.get());
             AuthContextHolder.set(ctx.get());
+            TenantContextHolder.set(tenantContext);
             return true;
+        } catch (MissingTenantContextException ex) {
+            writeUnauthorized(response, ex.getMessage());
+            return false;
         }
-
-        if (!sessions.isEnabled()) return true; // sessions not migrated yet — permissive mode
-
-        if (token != null) {
-            Optional<AuthContext> ctx = sessions.resolveAccessToken(token);
-            if (ctx.isPresent()) {
-                AuthContextHolder.set(ctx.get());
-            } else if (!publicPath) {
-                writeUnauthorized(response);
-                return false;
-            }
-            return true;
-        }
-
-        if (publicPath) return true;
-        return true; // backward compat: unauthenticated requests still pass during transition
     }
 
     @Override
     public void afterCompletion(HttpServletRequest request, HttpServletResponse response,
                                  Object handler, Exception ex) {
+        TenantContextHolder.clear();
         AuthContextHolder.clear();
     }
 
     private boolean isPublic(String path) {
         for (String prefix : PUBLIC_EXACT_OR_PREFIX) {
-            if (path.startsWith(prefix)) return true;
+            if (path.startsWith(prefix)) {
+                return true;
+            }
         }
         for (String prefix : PUBLIC_PREFIXES) {
-            if (path.startsWith(prefix)) return true;
+            if (path.startsWith(prefix)) {
+                return true;
+            }
         }
         return path.equals("/") || path.startsWith("/actuator");
-    }
-
-    private boolean isTenantScoped(String path) {
-        for (String prefix : TENANT_SCOPED_PREFIXES) {
-            if (path.startsWith(prefix)) return true;
-        }
-        return false;
     }
 
     private String extractBearer(HttpServletRequest request) {
@@ -135,10 +139,6 @@ public class AuthInterceptor implements HandlerInterceptor {
             return header.substring(7).trim();
         }
         return null;
-    }
-
-    private void writeUnauthorized(HttpServletResponse response) throws Exception {
-        writeUnauthorized(response, "Invalid or expired session");
     }
 
     private void writeUnauthorized(HttpServletResponse response, String message) throws Exception {

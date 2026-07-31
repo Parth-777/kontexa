@@ -2,6 +2,7 @@ package com.example.BACKEND.catalogue.decision.api;
 
 import com.example.BACKEND.catalogue.charts.ChartSpec;
 import com.example.BACKEND.catalogue.decision.contracts.DecisionModels.DecisionRunResult;
+import com.example.BACKEND.catalogue.decision.contracts.DecisionModels.PlannerRoutingOutcome;
 import com.example.BACKEND.catalogue.decision.contracts.DecisionModels.InsightOutput;
 import com.example.BACKEND.catalogue.decision.presentation.AnalyticalResponse;
 import com.example.BACKEND.catalogue.decision.presentation.AnalyticalResponse.FindingItem;
@@ -14,6 +15,7 @@ import com.example.BACKEND.catalogue.decision.presentation.executive.ExecutiveSu
 import com.example.BACKEND.catalogue.decision.presentation.executive.PrescriptiveContentGate;
 import com.example.BACKEND.catalogue.decision.presentation.executive.PresentationDebugMode;
 import com.example.BACKEND.catalogue.decision.execution.repair.ExecutionDiagnosticSession;
+import com.example.BACKEND.catalogue.investigation.ResponseSerializationGuard;
 import com.example.BACKEND.catalogue.decision.synthesis.answer.AnswerSynthesisOutput;
 import com.example.BACKEND.catalogue.decision.synthesis.answer.AnswerSynthesisProperties;
 import com.example.BACKEND.catalogue.semantic.phase2.SemanticShadowResponseMapper;
@@ -36,17 +38,22 @@ public class DecisionResponseMapper {
     private final ExecutionDiagnosticSession diagnosticSession;
     private final SemanticShadowResponseMapper shadowResponseMapper;
     private final AnswerSynthesisProperties answerSynthesisProperties;
+    private final ResponseSerializationGuard serializationGuard;
 
     public DecisionResponseMapper(
             PrescriptiveContentGate prescriptiveGate,
             ExecutionDiagnosticSession diagnosticSession,
             SemanticShadowResponseMapper shadowResponseMapper,
-            AnswerSynthesisProperties answerSynthesisProperties
+            AnswerSynthesisProperties answerSynthesisProperties,
+            ResponseSerializationGuard serializationGuard
     ) {
         this.prescriptiveGate = prescriptiveGate;
         this.diagnosticSession = diagnosticSession;
         this.shadowResponseMapper = shadowResponseMapper;
         this.answerSynthesisProperties = answerSynthesisProperties;
+        this.serializationGuard = serializationGuard != null
+                ? serializationGuard
+                : new ResponseSerializationGuard();
     }
 
     public Map<String, Object> toRunResponse(UUID runId, DecisionRunResult result) {
@@ -104,6 +111,9 @@ public class DecisionResponseMapper {
                 ? analytical.confidenceTier().name() : "MEDIUM");
         m.put("execution_mode", analytical.executionMode() != null
                 ? analytical.executionMode().name() : "HYBRID");
+
+        applyPlannerRoutingFields(m, runId, result.routing());
+
         if (debug && analytical.assumption() != null) {
             m.put("resolution_confidence", analytical.assumption().resolutionConfidence());
         }
@@ -165,7 +175,7 @@ public class DecisionResponseMapper {
             m.put("recovery_reason", analytical.recoveryReason());
         }
 
-        return m;
+        return serializationGuard.sanitizeResponse(m);
     }
 
     private Map<String, Object> buildExecutionPath(UUID runId, DecisionRunResult result) {
@@ -196,6 +206,15 @@ public class DecisionResponseMapper {
             path.put("validation_discard_reason", facts.getOrDefault("validation_discard_reason", ""));
             path.put("materialized_rows", facts.getOrDefault("materialized_rows", List.of()));
             path.put("materialization_failure_reason", facts.getOrDefault("materialization_failure_reason", ""));
+            if (facts.containsKey("phase2_trace")) {
+                path.put("phase2_trace", facts.get("phase2_trace"));
+            }
+            if (facts.containsKey("exact_root_cause")) {
+                path.put("exact_root_cause", facts.get("exact_root_cause"));
+            }
+            if (facts.containsKey("runtime_exception_stack_trace")) {
+                path.put("runtime_exception_stack_trace", facts.get("runtime_exception_stack_trace"));
+            }
             log.info("[execution-path] runId={} populated row_count={} sample_rows={} sql_len={}",
                     runId,
                     path.get("warehouse_row_count"),
@@ -232,6 +251,7 @@ public class DecisionResponseMapper {
         if (facts.isEmpty()) return Map.of();
         Map<String, Object> planner = new LinkedHashMap<>();
         copyIfPresent(facts, planner, "planner_mode", "mode");
+        copyIfPresent(facts, planner, "planner_execution_mode", "execution_mode");
         copyIfPresent(facts, planner, "served_path", "served_path");
         copyIfPresent(facts, planner, "resolved_metric", "metric");
         copyIfPresent(facts, planner, "resolved_dimension", "dimension");
@@ -241,6 +261,31 @@ public class DecisionResponseMapper {
         copyIfPresent(facts, planner, "gpt_validation_valid", "validation_valid");
         copyIfPresent(facts, planner, "gpt_validation_issues", "validation_issues");
         return planner;
+    }
+
+    private void applyPlannerRoutingFields(
+            Map<String, Object> response,
+            UUID runId,
+            PlannerRoutingOutcome routing
+    ) {
+        if (routing != null) {
+            response.put("planner_execution_mode", routing.plannerExecutionMode());
+            response.put("served_path", routing.servedPath());
+            if (routing.investigation() != null && !routing.investigation().isEmpty()) {
+                response.put("investigation", routing.investigation());
+            }
+            return;
+        }
+        Map<String, Object> facts = diagnosticSession.warehouseFacts(runId);
+        if (facts.containsKey("planner_execution_mode")) {
+            response.put("planner_execution_mode", facts.get("planner_execution_mode"));
+        }
+        if (facts.containsKey("served_path")) {
+            response.put("served_path", facts.get("served_path"));
+        }
+        if (facts.get("investigation") instanceof Map<?, ?> investigation) {
+            response.put("investigation", investigation);
+        }
     }
 
     private Map<String, Object> mapAnswerSynthesis(AnswerSynthesisOutput synthesis) {

@@ -19,7 +19,8 @@ import com.example.BACKEND.catalogue.decision.presentation.executive.ExecutivePr
 import com.example.BACKEND.catalogue.decision.presentation.executive.ExecutivePresentationBuilder;
 import com.example.BACKEND.catalogue.decision.presentation.executive.ExecutivePresentationStatisticsBuilder;
 import com.example.BACKEND.catalogue.decision.presentation.executive.ExecutiveConfidenceLabel;
- import com.example.BACKEND.catalogue.decision.synthesis.answer.AnswerSynthesisInputBuilder;
+import com.example.BACKEND.catalogue.decision.presentation.executive.strategy.PresentationBuildContext;
+import com.example.BACKEND.catalogue.decision.synthesis.answer.AnswerSynthesisInputBuilder;
 import com.example.BACKEND.catalogue.decision.synthesis.answer.AnswerSynthesisOutput;
 import com.example.BACKEND.catalogue.decision.synthesis.answer.AnswerSynthesizer;
 import com.example.BACKEND.catalogue.semantic.phase2.GptSemanticPlanningOrchestrator;
@@ -77,9 +78,11 @@ public final class CanonicalRuntimeFinisher {
         ComputationResultSet results = new ComputationResultSet(
                 runId, warehouseResults, Map.of("canonical_only", true));
 
-        List<Map<String, Object>> warehouseRows =
-                AnswerSynthesisInputBuilder.extractCanonicalRows(specs, warehouseResults);
         CanonicalQueryModel canonicalModel = gptOutcome.canonicalQueryModel();
+        // Single remapping: SQL SELECT aliases → CQM semantic paths for all presentation artifacts.
+        List<Map<String, Object>> warehouseRows = PresentationBuildContext.alignWarehouseKeysToCanonical(
+                canonicalModel,
+                AnswerSynthesisInputBuilder.extractCanonicalRows(specs, warehouseResults));
 
         ExecutivePresentation presentation = presentationBuilder.build(canonicalModel, warehouseRows);
         presentation = statisticsBuilder.enrich(presentation, canonicalModel, warehouseRows);
@@ -191,6 +194,6 @@ public final class CanonicalRuntimeFinisher {
                 presentation != null ? presentation.type() : null,
                 null);
 
-        return new DecisionRunResult(insight, analytical, null, null, synthesis, presentation, null);
+        return new DecisionRunResult(insight, analytical, null, null, synthesis, presentation, null, null);
     }
 }

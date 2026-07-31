@@ -25,6 +25,9 @@ public class SignalEntity {
     @Column(name = "client_id", nullable = false)
     private String clientId;
 
+    @Column(name = "tenant_id")
+    private UUID tenantId;
+
     @Column(name = "table_name", nullable = false)
     private String tableName;
 
@@ -72,6 +75,8 @@ public class SignalEntity {
     public void          setSignalId(UUID u)       { this.signalId = u; }
     public String        getClientId()             { return clientId; }
     public void          setClientId(String s)     { this.clientId = s; }
+    public UUID          getTenantId()             { return tenantId; }
+    public void          setTenantId(UUID u)       { this.tenantId = u; }
     public String        getTableName()            { return tableName; }
     public void          setTableName(String s)    { this.tableName = s; }
     public String        getTableSchema()          { return tableSchema; }

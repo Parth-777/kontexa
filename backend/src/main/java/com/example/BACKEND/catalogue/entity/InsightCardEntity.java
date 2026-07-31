@@ -33,6 +33,9 @@ public class InsightCardEntity {
     @Column(name = "client_id", nullable = false)
     private String clientId;
 
+    @Column(name = "tenant_id")
+    private UUID tenantId;
+
     @Column(name = "title", nullable = false, columnDefinition = "TEXT")
     private String title;
 
@@ -104,6 +107,8 @@ public class InsightCardEntity {
 
     public String getClientId()                { return clientId; }
     public void setClientId(String clientId)   { this.clientId = clientId; }
+    public UUID getTenantId()                  { return tenantId; }
+    public void setTenantId(UUID tenantId)     { this.tenantId = tenantId; }
 
     public String getTitle()                   { return title; }
     public void setTitle(String title)         { this.title = title; }

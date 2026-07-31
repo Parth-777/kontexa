@@ -2,6 +2,7 @@ package com.example.BACKEND.catalogue.decision.compute;
 
 import com.example.BACKEND.catalogue.decision.contracts.DecisionModels.*;
 import com.example.BACKEND.catalogue.decision.execution.sqltemplates.QueryExecutionDebugger;
+import com.example.BACKEND.catalogue.investigation.Phase2InvestigationPathTrace;
 import com.example.BACKEND.identity.auth.TenantAccessGuard;
 import com.example.BACKEND.tenant.BigQueryConnectorService;
 import com.example.BACKEND.tenant.TenantCloudConnectionService;
@@ -89,6 +90,10 @@ public class BigQueryWarehouseExecutor implements WarehouseExecutor {
                         spec.key(), elapsed, ex.getMessage(), sql);
                 meta.put("error." + spec.key(), ex.getMessage());
                 meta.put("failed_sql." + spec.key(), sql);
+                Phase2InvestigationPathTrace t = Phase2InvestigationPathTrace.current();
+                if (t != null) {
+                    t.addBigQueryError(spec.key(), sql, ex.getMessage());
+                }
                 failed++;
             }
         }

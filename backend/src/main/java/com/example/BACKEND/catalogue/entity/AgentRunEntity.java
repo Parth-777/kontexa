@@ -16,6 +16,9 @@ public class AgentRunEntity {
     @Column(name = "client_id", nullable = false)
     private String clientId;
 
+    @Column(name = "tenant_id")
+    private java.util.UUID tenantId;
+
     @Column(name = "started_at", nullable = false)
     private LocalDateTime startedAt;
 
@@ -42,6 +45,9 @@ public class AgentRunEntity {
 
     public String getClientId() { return clientId; }
     public void setClientId(String clientId) { this.clientId = clientId; }
+
+    public java.util.UUID getTenantId() { return tenantId; }
+    public void setTenantId(java.util.UUID tenantId) { this.tenantId = tenantId; }
 
     public LocalDateTime getStartedAt() { return startedAt; }
     public void setStartedAt(LocalDateTime startedAt) { this.startedAt = startedAt; }

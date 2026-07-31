@@ -1,0 +1,6 @@
+1. Dockerize app
+2. SLide deck
+3. Demo
+4. Website
+5 security, jwt token based authentication, encryption of passwords and database configurations
+6. multitenancy end to end

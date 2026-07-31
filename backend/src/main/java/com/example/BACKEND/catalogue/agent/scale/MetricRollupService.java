@@ -163,6 +163,7 @@ public class MetricRollupService {
 
                 DailyMetricRollupEntity entity = new DailyMetricRollupEntity();
                 entity.setClientId(clientId);
+                com.example.BACKEND.tenancy.TenantIdBinder.bind(entity::setTenantId);
                 entity.setTableName(tableName);
                 entity.setMetricDate(metricDate);
                 entity.setMetricName(metric);

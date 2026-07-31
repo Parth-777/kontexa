@@ -4,7 +4,9 @@ import com.example.BACKEND.catalogue.entity.TenantBusinessProfileEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.Optional;
+import java.util.UUID;
 
 public interface TenantBusinessProfileRepository extends JpaRepository<TenantBusinessProfileEntity, Long> {
     Optional<TenantBusinessProfileEntity> findByClientId(String clientId);
+    Optional<TenantBusinessProfileEntity> findByTenantId(UUID tenantId);
 }

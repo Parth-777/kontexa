@@ -1,12 +1,15 @@
 package com.example.BACKEND.catalogue.service;
 
 import com.example.BACKEND.catalogue.entity.CatalogueColumnEntity;
+import com.example.BACKEND.catalogue.schema.NestedSchemaFieldGraph;
 import com.example.BACKEND.catalogue.entity.CatalogueTableEntity;
 import com.example.BACKEND.catalogue.entity.ClientCatalogueEntity;
 import com.example.BACKEND.catalogue.model.CatalogueResult;
 import com.example.BACKEND.catalogue.model.ColumnInfo;
 import com.example.BACKEND.catalogue.model.TableInfo;
 import com.example.BACKEND.catalogue.repository.ClientCatalogueRepository;
+import com.example.BACKEND.tenancy.TenantContext;
+import com.example.BACKEND.tenancy.TenantContextHolder;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -14,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * Persists an enriched CatalogueResult into the catalogue_* tables.
@@ -34,20 +38,32 @@ public class CatalogueStorageService {
     /**
      * Save a fully-enriched CatalogueResult to the database as DRAFT.
      *
-     * @param clientId      an identifier for the client (e.g. "netflix", "acme_corp")
+     * Dual-writes legacy {@code client_id} (slug) and UUID {@code tenant_id}
+     * when {@link TenantContext} is bound.
+     *
+     * @param clientId      legacy identifier (workspace slug)
      * @param result        the enriched catalogue produced by /build-full
      * @return              the persisted entity (with generated id)
      */
     @Transactional
     public ClientCatalogueEntity save(String clientId, CatalogueResult result) {
+        return save(clientId, resolveTenantId(), result);
+    }
+
+    @Transactional
+    public ClientCatalogueEntity save(String clientId, UUID tenantId, CatalogueResult result) {
 
         ClientCatalogueEntity catalogue = new ClientCatalogueEntity();
         catalogue.setClientId(clientId);
+        catalogue.setTenantId(tenantId);
         catalogue.setDatabaseName(result.getDatabaseName());
         catalogue.setSchemaName(result.getSchemaName() != null ? result.getSchemaName() : "public");
         catalogue.setStatus("DRAFT");
         catalogue.setCreatedAt(LocalDateTime.now());
         catalogue.setUpdatedAt(LocalDateTime.now());
+        catalogue.setBusinessProfile(result.getBusinessProfile());
+        catalogue.setGlobalCaveats(toJsonArray(result.getGlobalCaveats()));
+        catalogue.setEntitiesJson(toJsonValue(result.getEntities()));
 
         for (TableInfo tableInfo : result.getTables()) {
             CatalogueTableEntity tableEntity = buildTableEntity(tableInfo, catalogue);
@@ -55,6 +71,11 @@ public class CatalogueStorageService {
         }
 
         return catalogueRepo.save(catalogue);
+    }
+
+    private static UUID resolveTenantId() {
+        TenantContext ctx = TenantContextHolder.get();
+        return ctx != null ? ctx.tenantId() : null;
     }
 
     private CatalogueTableEntity buildTableEntity(TableInfo tableInfo,
@@ -80,7 +101,11 @@ public class CatalogueStorageService {
         entity.setColumnName(col.getColumnName());
         entity.setDataType(col.getDataType());
         entity.setDescription(col.getDescription());
-        entity.setRole(col.getRole());
+        if (col.isContainer()) {
+            entity.setRole(NestedSchemaFieldGraph.ROLE_CONTAINER);
+        } else {
+            entity.setRole(col.getRole());
+        }
         entity.setMinValue(col.getMinValue());
         entity.setMaxValue(col.getMaxValue());
         entity.setAvgValue(col.getAvgValue());
@@ -91,6 +116,10 @@ public class CatalogueStorageService {
         entity.setSampleValues(toJsonArray(col.getSampleValues()));
         entity.setSynonyms(toJsonArray(col.getSynonyms()));
         entity.setValueMeanings(toJsonObject(col.getValueMeanings()));
+        // Rich semantic SoT + optional generate-time aggregation/confidence
+        entity.setBusinessMeaning(col.getBusinessMeaning());
+        entity.setAggregationMethod(col.getAggregationMethod());
+        entity.setConfidence(col.getConfidence());
 
         return entity;
     }
@@ -112,6 +141,15 @@ public class CatalogueStorageService {
             return objectMapper.writeValueAsString(map);
         } catch (Exception e) {
             return "{}";
+        }
+    }
+
+    private String toJsonValue(Object value) {
+        if (value == null) return "[]";
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception e) {
+            return "[]";
         }
     }
 }

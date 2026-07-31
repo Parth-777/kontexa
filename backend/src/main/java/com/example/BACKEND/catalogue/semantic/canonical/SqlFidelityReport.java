@@ -153,8 +153,18 @@ public final class SqlFidelityReport {
             mutations.add(new Mutation("ordering", orderLabel(expectedCol, expectedDir), "absent"));
             return false;
         }
+        // Renderer may ORDER BY the SELECT alias of an aggregated measure
+        // (last path segment) when ordering.column is the semantic measure leaf.
+        String measureAlias = null;
+        if (canonical.measure() != null && canonical.measure().column() != null
+                && eqIgnoreCase(expectedCol, canonical.measure().column())) {
+            String leaf = canonical.measure().column();
+            int dot = leaf.lastIndexOf('.');
+            measureAlias = dot >= 0 ? leaf.substring(dot + 1) : leaf;
+        }
         boolean colOk = eqIgnoreCase(expectedCol, parsed.orderColumn())
-                || containsIgnoreCase(parsed.orderColumn(), expectedCol);
+                || containsIgnoreCase(parsed.orderColumn(), expectedCol)
+                || (measureAlias != null && eqIgnoreCase(measureAlias, parsed.orderColumn()));
         boolean dirOk = expectedDir == null || expectedDir.isBlank()
                 || eqIgnoreCase(expectedDir, parsed.orderDirection());
         if (colOk && dirOk) {

@@ -6,6 +6,7 @@ import com.example.BACKEND.catalogue.charts.DynamicChartResponse;
 import com.example.BACKEND.catalogue.charts.DynamicChartService;
 import com.example.BACKEND.catalogue.repository.AgentReportRepository;
 import com.example.BACKEND.tenant.TenantContextResolver;
+import com.example.BACKEND.tenancy.TenantContext;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -16,17 +17,8 @@ import java.util.UUID;
 /**
  * Agentic analysis endpoints.
  *
- * POST /api/agent/dashboard
- *   Runs a full analysis for the tenant and returns fresh insight cards.
- *   Cards are also persisted to the database with AWAITING_CONFIRMATION status.
- *
- * GET /api/agent/insights
- *   Returns all active (non-expired) persisted insight cards for the tenant.
- *   This is the "feed" endpoint — the frontend can poll this without triggering
- *   a new LLM analysis.
- *
- * PATCH /api/agent/insights/{id}/status
- *   Updates a card's status to DECLINED or COMPLETED when the user acts on it.
+ * Tenant ownership comes exclusively from the authenticated {@code TenantContext}.
+ * Client {@code X-Client-Id}/{@code clientId} hints are mismatch-checked only.
  */
 @RestController
 @RequestMapping("/api/agent")
@@ -59,10 +51,6 @@ public class AgentDashboardController {
             @RequestBody(required = false) Map<String, Object> body
     ) {
         String clientId = tenantContextResolver.resolveClientId(clientIdHeader, body);
-        if (clientId == null || clientId.isBlank()) {
-            return ResponseEntity.badRequest()
-                    .body(Map.of("error", "clientId is required (X-Client-Id header or body)"));
-        }
         try {
             AgentDashboardResult result = agentOrchestrator.analyse(clientId);
             return ResponseEntity.ok(result);
@@ -78,38 +66,27 @@ public class AgentDashboardController {
             @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
             @RequestParam(value = "clientId", required = false) String clientIdParam
     ) {
-        String clientId = clientIdHeader != null && !clientIdHeader.isBlank()
-                ? clientIdHeader : clientIdParam;
-        if (clientId == null || clientId.isBlank()) {
-            return ResponseEntity.badRequest()
-                    .body(Map.of("error", "clientId is required"));
-        }
+        String clientId = tenantContextResolver.resolveClientId(clientIdHeader, clientIdParam);
         List<InsightCardEntity> cards = agentOrchestrator.getActiveInsights(clientId);
         return ResponseEntity.ok(cards);
     }
 
     /**
      * GET /api/agent/charts
-     * Returns chart specs for the sidebar panel beside the Agent Feed (stacked under the panel header).
-     * Poll alongside GET /api/agent/insights after refresh.
+     * Returns chart specs for the sidebar panel beside the Agent Feed.
      */
     @GetMapping("/charts")
     public ResponseEntity<?> getCharts(
             @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
             @RequestParam(value = "clientId", required = false) String clientIdParam
     ) {
-        String clientId = clientIdHeader != null && !clientIdHeader.isBlank()
-                ? clientIdHeader : clientIdParam;
-        if (clientId == null || clientId.isBlank()) {
-            return ResponseEntity.badRequest()
-                    .body(Map.of("error", "clientId is required"));
-        }
+        String clientId = tenantContextResolver.resolveClientId(clientIdHeader, clientIdParam);
         return ResponseEntity.ok(agentOrchestrator.getChartPanel(clientId));
     }
 
     /**
      * POST /api/agent/charts/generate
-     * Natural-language chart builder — e.g. "Generate a bar chart of revenue by payment type".
+     * Natural-language chart builder.
      */
     @PostMapping("/charts/generate")
     public ResponseEntity<?> generateChart(
@@ -117,9 +94,6 @@ public class AgentDashboardController {
             @RequestBody Map<String, Object> body
     ) {
         String clientId = tenantContextResolver.resolveClientId(clientIdHeader, body);
-        if (clientId == null || clientId.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "clientId is required"));
-        }
         String request = body.get("request") == null ? null : String.valueOf(body.get("request")).trim();
         if (request == null || request.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "request is required"));
@@ -133,29 +107,22 @@ public class AgentDashboardController {
     }
 
     /**
-     * GET /api/agent/insights/followup?clientId=xxx
-     * Returns 4-5 suggested follow-up questions derived from the current active insight cards.
-     * Called by the frontend whenever the persisted feed is loaded (so suggested questions
-     * always appear, regardless of whether a live Refresh was just run).
+     * GET /api/agent/insights/followup
+     * Suggested follow-up questions from active insight cards.
      */
     @GetMapping("/insights/followup")
     public ResponseEntity<?> getFollowUpQuestions(
             @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
             @RequestParam(value = "clientId", required = false) String clientIdParam
     ) {
-        String clientId = clientIdHeader != null && !clientIdHeader.isBlank()
-                ? clientIdHeader : clientIdParam;
-        if (clientId == null || clientId.isBlank())
-            return ResponseEntity.badRequest().body(Map.of("error", "clientId is required"));
-
+        String clientId = tenantContextResolver.resolveClientId(clientIdHeader, clientIdParam);
         List<String> questions = agentOrchestrator.generateFollowUpFromActiveInsights(clientId);
         return ResponseEntity.ok(Map.of("followUpQuestions", questions));
     }
 
     /**
      * GET /api/agent/insights/{id}/evidence
-     * Returns the raw data the AI saw when generating this insight card.
-     * Used to verify accuracy — "what rows did the AI actually look at?"
+     * Raw evidence for an insight card — ownership required.
      */
     @GetMapping("/insights/{id}/evidence")
     public ResponseEntity<?> getInsightEvidence(
@@ -163,9 +130,7 @@ public class AgentDashboardController {
             @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
             @RequestParam(value = "clientId", required = false) String clientIdParam
     ) {
-        String clientId = clientIdHeader != null && !clientIdHeader.isBlank()
-                ? clientIdHeader : clientIdParam;
-
+        String clientId = tenantContextResolver.resolveClientId(clientIdHeader, clientIdParam);
         return agentOrchestrator.getInsightEvidence(cardId, clientId)
                 .map(evidence -> ResponseEntity.ok(Map.of(
                         "cardId",        cardId.toString(),
@@ -175,21 +140,24 @@ public class AgentDashboardController {
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
-    /** Returns saved reports for a tenant (newest first). */
+    /** Returns saved reports for the authenticated tenant (newest first). */
     @GetMapping("/reports")
     public ResponseEntity<?> getReports(
             @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
             @RequestParam(value = "clientId", required = false) String clientIdParam,
             @RequestParam(value = "type", required = false) String type
     ) {
-        String clientId = clientIdHeader != null && !clientIdHeader.isBlank()
-                ? clientIdHeader : clientIdParam;
-        if (clientId == null || clientId.isBlank())
-            return ResponseEntity.badRequest().body(Map.of("error", "clientId is required"));
-
+        TenantContext ctx = tenantContextResolver.resolveContext(clientIdHeader, clientIdParam);
         List<AgentReportEntity> reports = type != null && !type.isBlank()
-                ? reportRepository.findByClientIdAndPeriodTypeOrderByGeneratedAtDesc(clientId, type.toUpperCase())
-                : reportRepository.findByClientIdOrderByGeneratedAtDesc(clientId);
+                ? reportRepository.findByTenantIdAndPeriodTypeOrderByGeneratedAtDesc(
+                        ctx.tenantId(), type.toUpperCase())
+                : reportRepository.findByTenantIdOrderByGeneratedAtDesc(ctx.tenantId());
+        if (reports.isEmpty()) {
+            reports = type != null && !type.isBlank()
+                    ? reportRepository.findByClientIdAndPeriodTypeOrderByGeneratedAtDesc(
+                            ctx.legacyTenantKey(), type.toUpperCase())
+                    : reportRepository.findByClientIdOrderByGeneratedAtDesc(ctx.legacyTenantKey());
+        }
         return ResponseEntity.ok(reports);
     }
 
@@ -199,12 +167,9 @@ public class AgentDashboardController {
             @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
             @RequestBody(required = false) Map<String, String> body
     ) {
-        String clientId = clientIdHeader != null && !clientIdHeader.isBlank()
-                ? clientIdHeader : (body != null ? body.get("clientId") : null);
-        if (clientId == null || clientId.isBlank())
-            return ResponseEntity.badRequest().body(Map.of("error", "clientId is required"));
-
-        String type = (body != null && body.containsKey("type"))
+        String clientId = tenantContextResolver.resolveClientId(
+                clientIdHeader, body != null ? body : Map.of());
+        String type = (body != null && body.containsKey("type") && body.get("type") != null)
                 ? body.get("type").toUpperCase() : "WEEKLY";
         if (!type.equals("WEEKLY") && !type.equals("MONTHLY"))
             return ResponseEntity.badRequest().body(Map.of("error", "type must be WEEKLY or MONTHLY"));
@@ -224,13 +189,9 @@ public class AgentDashboardController {
             @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
             @RequestBody Map<String, String> body
     ) {
-        String clientId = clientIdHeader != null && !clientIdHeader.isBlank()
-                ? clientIdHeader : body.get("clientId");
+        String clientId = tenantContextResolver.resolveClientId(clientIdHeader, body);
         String newStatus = body.get("status");
 
-        if (clientId == null || clientId.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "clientId is required"));
-        }
         if (newStatus == null || (!newStatus.equals("DECLINED") && !newStatus.equals("COMPLETED"))) {
             return ResponseEntity.badRequest()
                     .body(Map.of("error", "status must be COMPLETED (mark as read) or DECLINED (dismiss)"));
@@ -246,20 +207,15 @@ public class AgentDashboardController {
     }
 
     /**
-     * DELETE /api/agent/insights/pending?clientId=xxx
-     * Manually retire all AWAITING_CONFIRMATION cards (clears accumulated stale cards).
-     * Safe to call at any time — DECLINED/COMPLETED cards are kept.
+     * DELETE /api/agent/insights/pending
+     * Retire all AWAITING_CONFIRMATION cards for the authenticated tenant.
      */
     @DeleteMapping("/insights/pending")
     public ResponseEntity<?> clearPendingInsights(
             @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
             @RequestParam(value = "clientId", required = false) String clientIdParam
     ) {
-        String clientId = (clientIdHeader != null && !clientIdHeader.isBlank())
-                ? clientIdHeader : clientIdParam;
-        if (clientId == null || clientId.isBlank())
-            return ResponseEntity.badRequest().body(Map.of("error", "clientId is required"));
-
+        String clientId = tenantContextResolver.resolveClientId(clientIdHeader, clientIdParam);
         int cleared = agentOrchestrator.clearPendingInsights(clientId);
         return ResponseEntity.ok(Map.of("cleared", cleared, "clientId", clientId));
     }

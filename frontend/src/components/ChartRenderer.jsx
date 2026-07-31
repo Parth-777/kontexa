@@ -3,6 +3,7 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  ComposedChart,
   Legend,
   Line,
   LineChart,
@@ -38,6 +39,39 @@ function buildChartData(spec) {
     return rows.map((row, idx) => ({
       name: String(pickKey(row, xKey, 'name') ?? idx + 1),
       value: Number(pickKey(row, yKey, 'value')),
+      raw: row,
+    })).filter((d) => Number.isFinite(d.value));
+  }
+
+  if (type === 'GROUPED_BAR') {
+    const categoryKey = spec.categoryKey || 'member';
+    return rows.map((row, idx) => {
+      const name = String(pickKey(row, categoryKey, 'name') ?? `#${idx + 1}`);
+      const focal = Number(row.focal ?? row.focal_value);
+      const baseline = Number(row.baseline ?? row.baseline_value);
+      if (Number.isFinite(focal) || Number.isFinite(baseline)) {
+        return {
+          name,
+          focal: Number.isFinite(focal) ? focal : 0,
+          baseline: Number.isFinite(baseline) ? baseline : 0,
+          value: Number.isFinite(focal) ? focal : Number(row.value),
+          raw: row,
+        };
+      }
+      return {
+        name,
+        value: Number(pickKey(row, spec.valueKey || 'value', 'value')),
+        raw: row,
+      };
+    }).filter((d) => Number.isFinite(d.value) || Number.isFinite(d.focal) || Number.isFinite(d.baseline));
+  }
+
+  if (type === 'PARETO') {
+    const categoryKey = spec.categoryKey || 'member';
+    return rows.map((row, idx) => ({
+      name: String(pickKey(row, categoryKey, 'name') ?? `#${idx + 1}`),
+      value: Number(pickKey(row, spec.valueKey || 'value', 'value')),
+      cumulative: Number(row.cumulative_share ?? row.cumulative),
       raw: row,
     })).filter((d) => Number.isFinite(d.value));
   }
@@ -163,6 +197,62 @@ export default function ChartRenderer({ spec }) {
             <Tooltip content={tooltip} />
             <Legend wrapperStyle={{ color: '#8892aa', fontSize: 12 }} />
           </PieChart>
+        </ResponsiveContainer>
+      </div>
+    );
+  }
+
+  if (type === 'PARETO') {
+    return (
+      <div className="chart-pro">
+        <ResponsiveContainer width="100%" height={300}>
+          <ComposedChart data={data} margin={{ top: 12, right: 24, left: 8, bottom: 8 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
+            <XAxis dataKey="name" tick={{ fill: '#8892aa', fontSize: 11 }} tickLine={false} />
+            <YAxis yAxisId="left" tick={{ fill: '#8892aa', fontSize: 11 }} tickFormatter={formatTick} width={72} />
+            <YAxis
+              yAxisId="right"
+              orientation="right"
+              domain={[0, 100]}
+              tick={{ fill: '#8892aa', fontSize: 11 }}
+              tickFormatter={(v) => `${v}%`}
+              width={48}
+            />
+            <Tooltip content={tooltip} />
+            <Legend wrapperStyle={{ color: '#8892aa', fontSize: 12 }} />
+            <Bar yAxisId="left" dataKey="value" name="Value" radius={[6, 6, 0, 0]} maxBarSize={36}>
+              {data.map((entry, index) => (
+                <Cell key={entry.name} fill={COLORS[index % COLORS.length]} />
+              ))}
+            </Bar>
+            <Line
+              yAxisId="right"
+              type="monotone"
+              dataKey="cumulative"
+              name="Cumulative %"
+              stroke="#f59e0b"
+              strokeWidth={2.5}
+              dot={{ r: 3 }}
+            />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+    );
+  }
+
+  if (type === 'GROUPED_BAR' && data.some((d) => d.focal != null || d.baseline != null)) {
+    return (
+      <div className="chart-pro">
+        <ResponsiveContainer width="100%" height={280}>
+          <BarChart data={data} margin={{ top: 12, right: 16, left: 8, bottom: 8 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" vertical={false} />
+            <XAxis dataKey="name" tick={{ fill: '#8892aa', fontSize: 11 }} tickLine={false} />
+            <YAxis tick={{ fill: '#8892aa', fontSize: 11 }} tickFormatter={formatTick} width={72} />
+            <Tooltip content={tooltip} />
+            <Legend wrapperStyle={{ color: '#8892aa', fontSize: 12 }} />
+            <Bar dataKey="focal" name="Focal" fill="#3b82f6" radius={[6, 6, 0, 0]} maxBarSize={28} />
+            <Bar dataKey="baseline" name="Baseline" fill="#94a3b8" radius={[6, 6, 0, 0]} maxBarSize={28} />
+          </BarChart>
         </ResponsiveContainer>
       </div>
     );

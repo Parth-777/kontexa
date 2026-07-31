@@ -15,15 +15,18 @@ import java.util.UUID;
 @Repository
 public interface InsightCardRepository extends JpaRepository<InsightCardEntity, UUID> {
 
-    /** All non-expired cards for a client, newest first. */
     List<InsightCardEntity> findByClientIdAndStatusNotOrderByGeneratedAtDesc(
             String clientId, String status);
 
-    /** Cards by specific status (e.g. AWAITING_CONFIRMATION). */
+    List<InsightCardEntity> findByTenantIdAndStatusNotOrderByGeneratedAtDesc(
+            UUID tenantId, String status);
+
     List<InsightCardEntity> findByClientIdAndStatusOrderByGeneratedAtDesc(
             String clientId, String status);
 
-    /** Auto-expire cards whose TTL has passed and are still pending. */
+    List<InsightCardEntity> findByTenantIdAndStatusOrderByGeneratedAtDesc(
+            UUID tenantId, String status);
+
     @Modifying
     @Transactional
     @Query("UPDATE InsightCardEntity c SET c.status = 'EXPIRED' " +
@@ -32,18 +35,26 @@ public interface InsightCardRepository extends JpaRepository<InsightCardEntity, 
     int expireOldCards(@Param("clientId") String clientId,
                        @Param("now") LocalDateTime now);
 
-    /**
-     * Immediately retire ALL pending cards for a client when a fresh analysis
-     * is triggered. Prevents card accumulation across repeated refreshes.
-     * DECLINED and COMPLETED cards are kept for decision memory.
-     */
+    @Modifying
+    @Transactional
+    @Query("UPDATE InsightCardEntity c SET c.status = 'EXPIRED' " +
+           "WHERE c.tenantId = :tenantId AND c.status = 'AWAITING_CONFIRMATION' " +
+           "AND c.expiresAt < :now")
+    int expireOldCardsByTenantId(@Param("tenantId") UUID tenantId,
+                                 @Param("now") LocalDateTime now);
+
     @Modifying
     @Transactional
     @Query("UPDATE InsightCardEntity c SET c.status = 'EXPIRED' " +
            "WHERE c.clientId = :clientId AND c.status = 'AWAITING_CONFIRMATION'")
     int retireAllPendingCards(@Param("clientId") String clientId);
 
-    /** Mark a single card status change and set acted_at. */
+    @Modifying
+    @Transactional
+    @Query("UPDATE InsightCardEntity c SET c.status = 'EXPIRED' " +
+           "WHERE c.tenantId = :tenantId AND c.status = 'AWAITING_CONFIRMATION'")
+    int retireAllPendingCardsByTenantId(@Param("tenantId") UUID tenantId);
+
     @Modifying
     @Transactional
     @Query("UPDATE InsightCardEntity c SET c.status = :status, c.actedAt = :now " +
@@ -52,4 +63,13 @@ public interface InsightCardRepository extends JpaRepository<InsightCardEntity, 
                      @Param("clientId") String clientId,
                      @Param("status") String status,
                      @Param("now") LocalDateTime now);
+
+    @Modifying
+    @Transactional
+    @Query("UPDATE InsightCardEntity c SET c.status = :status, c.actedAt = :now " +
+           "WHERE c.id = :id AND c.tenantId = :tenantId")
+    int updateStatusByTenantId(@Param("id") UUID id,
+                               @Param("tenantId") UUID tenantId,
+                               @Param("status") String status,
+                               @Param("now") LocalDateTime now);
 }

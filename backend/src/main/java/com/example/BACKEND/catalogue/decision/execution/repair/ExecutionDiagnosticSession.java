@@ -33,10 +33,18 @@ public class ExecutionDiagnosticSession {
 
     public void recordWarehouseFacts(UUID runId, java.util.Map<String, Object> facts) {
         if (runId == null || facts == null) return;
-        warehouseFacts.put(runId, facts);
-        int rowCount = facts.get("warehouse_row_count") instanceof Number n ? n.intValue() : 0;
-        int sampleSize = facts.get("sample_rows") instanceof List<?> rows ? rows.size() : 0;
-        String sql = facts.get("generated_sql") != null ? facts.get("generated_sql").toString() : "";
+        warehouseFacts.compute(runId, (id, existing) -> {
+            java.util.LinkedHashMap<String, Object> merged = new java.util.LinkedHashMap<>();
+            if (existing != null) {
+                merged.putAll(existing);
+            }
+            merged.putAll(facts);
+            return merged;
+        });
+        java.util.Map<String, Object> merged = warehouseFacts.get(runId);
+        int rowCount = merged.get("warehouse_row_count") instanceof Number n ? n.intValue() : 0;
+        int sampleSize = merged.get("sample_rows") instanceof List<?> rows ? rows.size() : 0;
+        String sql = merged.get("generated_sql") != null ? merged.get("generated_sql").toString() : "";
         org.slf4j.LoggerFactory.getLogger(ExecutionDiagnosticSession.class).info(
                 "[warehouse-facts] record runId={} session={} row_count={} sample_rows={} sql_len={}",
                 runId, System.identityHashCode(this), rowCount, sampleSize, sql.length());

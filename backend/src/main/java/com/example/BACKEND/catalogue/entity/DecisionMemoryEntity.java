@@ -19,6 +19,9 @@ public class DecisionMemoryEntity {
     @Column(name = "client_id", nullable = false)
     private String clientId;
 
+    @Column(name = "tenant_id")
+    private java.util.UUID tenantId;
+
     @Column(name = "badge")
     private String badge;
 
@@ -38,6 +41,8 @@ public class DecisionMemoryEntity {
     public Long getId()                        { return id; }
     public String getClientId()                { return clientId; }
     public void setClientId(String v)          { this.clientId = v; }
+    public java.util.UUID getTenantId()        { return tenantId; }
+    public void setTenantId(java.util.UUID v)  { this.tenantId = v; }
     public String getBadge()                   { return badge; }
     public void setBadge(String v)             { this.badge = v; }
     public String getAgentName()               { return agentName; }

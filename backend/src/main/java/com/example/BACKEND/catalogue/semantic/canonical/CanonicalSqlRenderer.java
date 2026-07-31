@@ -1,5 +1,6 @@
 package com.example.BACKEND.catalogue.semantic.canonical;
 
+import com.example.BACKEND.catalogue.schema.SqlFieldReferenceEmitter;
 import com.example.BACKEND.catalogue.decision.contracts.DecisionModels.QuerySpec;
 import org.springframework.stereotype.Component;
 
@@ -7,7 +8,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.regex.Pattern;
 
 /**
  * Renders warehouse SQL exclusively from a {@link CanonicalQueryModel}.
@@ -15,8 +15,6 @@ import java.util.regex.Pattern;
  */
 @Component
 public class CanonicalSqlRenderer {
-
-    private static final Pattern SAFE_IDENTIFIER = Pattern.compile("^[a-zA-Z_][a-zA-Z0-9_]*$");
 
     public QuerySpec render(CanonicalQueryModel model, String tableRef) {
         if (model == null) {
@@ -90,7 +88,7 @@ public class CanonicalSqlRenderer {
             CanonicalQueryModel.MeasureSpec denom = model.ratio().denominator();
             String denomCol = requireIdentifier(denom.column(), "ratio.denominator.column");
             String denomAgg = requireAggregation(denom.aggregation());
-            selectParts.add(denomAgg + "(" + denomCol + ") AS " + denomCol);
+            selectParts.add(denomAgg + "(" + denomCol + ") AS " + SqlFieldReferenceEmitter.emitAlias(denomCol));
         }
 
         StringBuilder sql = new StringBuilder();
@@ -120,7 +118,7 @@ public class CanonicalSqlRenderer {
         PartitionExpression partition = partitionExpression(model);
         List<String> selectParts = new ArrayList<>();
         selectParts.add(partition.expression() + " AS " + partition.alias());
-        selectParts.add(agg + "(" + metricCol + ") AS " + metricCol);
+        selectParts.add(agg + "(" + metricCol + ") AS " + SqlFieldReferenceEmitter.emitAlias(metricCol));
 
         if (model.ratio() != null && model.ratio().denominator() != null
                 && model.ratio().denominator().column() != null
@@ -128,7 +126,7 @@ public class CanonicalSqlRenderer {
             CanonicalQueryModel.MeasureSpec denom = model.ratio().denominator();
             String denomCol = requireIdentifier(denom.column(), "ratio.denominator.column");
             String denomAgg = requireAggregation(denom.aggregation());
-            selectParts.add(denomAgg + "(" + denomCol + ") AS " + denomCol);
+            selectParts.add(denomAgg + "(" + denomCol + ") AS " + SqlFieldReferenceEmitter.emitAlias(denomCol));
         }
 
         StringBuilder sql = new StringBuilder();
@@ -148,7 +146,7 @@ public class CanonicalSqlRenderer {
 
         StringBuilder sql = new StringBuilder();
         sql.append("SELECT\n  ").append(agg).append("(").append(metricCol).append(") AS ")
-                .append(metricCol);
+                .append(SqlFieldReferenceEmitter.emitAlias(metricCol));
         sql.append("\nFROM ").append(tableRef);
         appendWhere(sql, model, List.of());
         appendOrderBy(sql, model);
@@ -161,12 +159,13 @@ public class CanonicalSqlRenderer {
         String grain = model.partition().timeGrain();
         if (grain != null && !grain.isBlank()) {
             String upperGrain = grain.toUpperCase(Locale.ROOT);
-            String alias = column + "_" + upperGrain.toLowerCase(Locale.ROOT);
+            String alias = SqlFieldReferenceEmitter.emitAlias(column) + "_"
+                    + upperGrain.toLowerCase(Locale.ROOT);
             return new PartitionExpression(
                     "DATE_TRUNC('" + upperGrain + "', " + column + ")",
                     alias);
         }
-        return new PartitionExpression(column, column);
+        return new PartitionExpression(column, SqlFieldReferenceEmitter.emitAlias(column));
     }
 
     private static void appendWhere(
@@ -196,15 +195,71 @@ public class CanonicalSqlRenderer {
                 || model.ordering().column().isBlank()) {
             return;
         }
-        String column = requireIdentifier(model.ordering().column(), "ordering.column");
+        // Semantic ordering.column is a catalogue leaf. Under GROUP BY / aggregation the
+        // SELECT projects that leaf as AGG(leaf) AS <alias>; ORDER BY must use the alias
+        // (or an equivalent aggregated expression), never the bare leaf.
+        String orderExpr = resolveOrderByExpression(model);
         String direction = model.ordering().direction() != null
                 ? model.ordering().direction().toUpperCase(Locale.ROOT)
                 : null;
         if (direction != null && !direction.isBlank()) {
-            sql.append("\nORDER BY ").append(column).append(" ").append(direction);
+            sql.append("\nORDER BY ").append(orderExpr).append(" ").append(direction);
         } else {
-            sql.append("\nORDER BY ").append(column);
+            sql.append("\nORDER BY ").append(orderExpr);
         }
+    }
+
+    /**
+     * Maps a semantic ordering leaf to a legal SQL ORDER BY target for the rendered SELECT.
+     */
+    private static String resolveOrderByExpression(CanonicalQueryModel model) {
+        String orderingRaw = model.ordering().column().trim();
+        String orderingCol = requireIdentifier(orderingRaw, "ordering.column");
+
+        if (model.bivariate() != null
+                && model.bivariate().function() != null
+                && !model.bivariate().function().isBlank()) {
+            String colA = model.bivariate().columnA();
+            String colB = model.bivariate().columnB();
+            if (eqPath(orderingRaw, colA) || eqPath(orderingRaw, colB)
+                    || eqPath(orderingCol, colA) || eqPath(orderingCol, colB)) {
+                return "correlation_coefficient";
+            }
+        }
+
+        if (model.measure() != null
+                && model.measure().column() != null
+                && !model.measure().column().isBlank()
+                && (eqPath(orderingRaw, model.measure().column())
+                        || eqPath(orderingCol, model.measure().column()))) {
+            return SqlFieldReferenceEmitter.emitAlias(model.measure().column());
+        }
+
+        if (model.ratio() != null
+                && model.ratio().denominator() != null
+                && model.ratio().denominator().column() != null
+                && !model.ratio().denominator().column().isBlank()
+                && (eqPath(orderingRaw, model.ratio().denominator().column())
+                        || eqPath(orderingCol, model.ratio().denominator().column()))) {
+            return SqlFieldReferenceEmitter.emitAlias(model.ratio().denominator().column());
+        }
+
+        if (model.partition() != null
+                && model.partition().column() != null
+                && !model.partition().column().isBlank()
+                && (eqPath(orderingRaw, model.partition().column())
+                        || eqPath(orderingCol, model.partition().column()))) {
+            return partitionExpression(model).alias();
+        }
+
+        return orderingCol;
+    }
+
+    private static boolean eqPath(String a, String b) {
+        if (a == null || b == null) {
+            return false;
+        }
+        return a.trim().equalsIgnoreCase(b.trim());
     }
 
     private static void appendLimit(StringBuilder sql, CanonicalQueryModel model) {
@@ -237,10 +292,11 @@ public class CanonicalSqlRenderer {
         if (value == null || value.isBlank()) {
             throw new IllegalArgumentException(field + " required");
         }
-        if (!SAFE_IDENTIFIER.matcher(value).matches()) {
-            throw new IllegalArgumentException("unsafe identifier for " + field + ": " + value);
+        try {
+            return SqlFieldReferenceEmitter.emitFieldReference(value);
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalArgumentException("unsafe identifier for " + field + ": " + value, ex);
         }
-        return value;
     }
 
     private record PartitionExpression(String expression, String alias) {}

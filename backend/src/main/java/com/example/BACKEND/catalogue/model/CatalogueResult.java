@@ -3,6 +3,7 @@ package com.example.BACKEND.catalogue.model;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * The top-level result object returned after running the full catalogue
@@ -22,6 +23,16 @@ public class CatalogueResult {
     private LocalDateTime discoveredAt;
     private List<TableInfo> tables = new ArrayList<>();
     private String status; // DRAFT, APPROVED, REJECTED
+
+    /**
+     * Catalogue-level semantic curriculum (optional until generate prompt emits it).
+     * Stored on each ClientCatalogueEntity row so future versioning keeps semantics
+     * with the catalogue version, not only in the published snapshot blob.
+     */
+    private String businessProfile;
+    private List<String> globalCaveats = new ArrayList<>();
+    /** Light concept map entries: name, description, grain. */
+    private List<Map<String, String>> entities = new ArrayList<>();
 
     // Summary stats
     private int totalTables;
@@ -66,6 +77,19 @@ public class CatalogueResult {
 
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
+
+    public String getBusinessProfile() { return businessProfile; }
+    public void setBusinessProfile(String businessProfile) { this.businessProfile = businessProfile; }
+
+    public List<String> getGlobalCaveats() { return globalCaveats; }
+    public void setGlobalCaveats(List<String> globalCaveats) {
+        this.globalCaveats = globalCaveats != null ? globalCaveats : new ArrayList<>();
+    }
+
+    public List<Map<String, String>> getEntities() { return entities; }
+    public void setEntities(List<Map<String, String>> entities) {
+        this.entities = entities != null ? entities : new ArrayList<>();
+    }
 
     public int getTotalTables() { return totalTables; }
     public int getTotalColumns() { return totalColumns; }

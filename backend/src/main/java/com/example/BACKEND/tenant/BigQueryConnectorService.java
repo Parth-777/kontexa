@@ -6,6 +6,7 @@ import com.google.cloud.bigquery.BigQuery;
 import com.google.cloud.bigquery.BigQueryException;
 import com.google.cloud.bigquery.BigQueryOptions;
 import com.google.cloud.bigquery.DatasetId;
+import com.example.BACKEND.catalogue.investigation.WarehouseRowNormalizer;
 import com.google.cloud.bigquery.FieldValueList;
 import com.google.cloud.bigquery.Job;
 import com.google.cloud.bigquery.JobId;
@@ -199,7 +200,7 @@ public class BigQueryConnectorService {
                 if (result.getSchema() != null && result.getSchema().getFields() != null) {
                     for (int i = 0; i < result.getSchema().getFields().size(); i++) {
                         String col = result.getSchema().getFields().get(i).getName();
-                        mapped.put(col, row.get(i).isNull() ? null : row.get(i).getValue());
+                        mapped.put(col, WarehouseRowNormalizer.normalizeFieldValue(row.get(i)));
                     }
                 }
                 rows.add(mapped);
