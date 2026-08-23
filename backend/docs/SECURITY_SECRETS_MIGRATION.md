@@ -31,7 +31,20 @@ The app still reads the **same property keys** (`openai.api.key`, `spring.dataso
 | `SPRING_MAIL_USERNAME` | `spring.mail.username` | If mail on | _(none)_ |
 | `SPRING_MAIL_PASSWORD` | `spring.mail.password` | If mail on | _(none)_ |
 | `KONTEXA_AUTH_FRONTEND_BASE_URL` | `kontexa.auth.frontend-base-url` | No | `http://localhost:3000` |
+| `KONTEXA_CONNECTOR_ENCRYPTION_KEY` | `kontexa.connector.encryption-key` | **Prod: yes** | _(none — Base64 32-byte AES key)_ |
 | `SPRING_PROFILES_ACTIVE` | active profiles | Prod: set `prod` | default profile `local` |
+
+### Connector encryption key
+
+```bash
+# Generate a key (do not commit it)
+openssl rand -base64 32
+
+# PowerShell
+[Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 }) -as [byte[]])
+```
+
+Set `KONTEXA_CONNECTOR_ENCRYPTION_KEY` in the environment. When set, `workspace_connectors.encrypted_credentials` stores AES-256-GCM envelopes (`ENC:v1:...`). Legacy plaintext rows are decrypted in memory and rewritten as ciphertext on first read.
 
 Spring Boot relaxed binding accepts these env names without any entry in `application.properties`.
 

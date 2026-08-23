@@ -1,6 +1,8 @@
 package com.example.BACKEND.user;
 
+import com.example.BACKEND.identity.auth.AuthorizationService;
 import com.example.BACKEND.tenant.BigQueryConnectorService;
+import com.example.BACKEND.tenant.PostgresConnectorService;
 import com.example.BACKEND.tenant.SnowflakeConnectorService;
 import com.example.BACKEND.tenant.TenantCloudConnectionService;
 import com.example.BACKEND.tenant.TenantContextResolver;
@@ -18,20 +20,26 @@ public class UserAccessController {
     private final TenantCloudConnectionService cloudConnectionService;
     private final BigQueryConnectorService bigQueryConnectorService;
     private final SnowflakeConnectorService snowflakeConnectorService;
+    private final PostgresConnectorService postgresConnectorService;
     private final TenantContextResolver tenantContextResolver;
+    private final AuthorizationService authorization;
 
     public UserAccessController(
             UserAccessService userAccessService,
             TenantCloudConnectionService cloudConnectionService,
             BigQueryConnectorService bigQueryConnectorService,
             SnowflakeConnectorService snowflakeConnectorService,
-            TenantContextResolver tenantContextResolver
+            PostgresConnectorService postgresConnectorService,
+            TenantContextResolver tenantContextResolver,
+            AuthorizationService authorization
     ) {
         this.userAccessService = userAccessService;
         this.cloudConnectionService = cloudConnectionService;
         this.bigQueryConnectorService = bigQueryConnectorService;
         this.snowflakeConnectorService = snowflakeConnectorService;
+        this.postgresConnectorService = postgresConnectorService;
         this.tenantContextResolver = tenantContextResolver;
+        this.authorization = authorization;
     }
 
     @PostMapping("/api/auth/user/login")
@@ -56,6 +64,7 @@ public class UserAccessController {
 
     @GetMapping("/api/tenant/users")
     public ResponseEntity<?> listUsers(@RequestParam(required = false) String tenantId) {
+        authorization.requireAdmin();
         String resolvedTenantId = tenantContextResolver.resolveClientId(null, tenantId);
         List<Map<String, Object>> users = userAccessService.listUsers(resolvedTenantId);
         return ResponseEntity.ok(Map.of("users", users));
@@ -63,6 +72,7 @@ public class UserAccessController {
 
     @PostMapping("/api/tenant/users")
     public ResponseEntity<?> createUser(@RequestBody Map<String, Object> body) {
+        authorization.requireAdmin();
         String tenantId = tenantContextResolver.resolveClientId(null, body);
         String userId = asString(body.get("userId"));
         String password = asString(body.get("password"));
@@ -77,6 +87,7 @@ public class UserAccessController {
 
     @PutMapping("/api/tenant/users/{userId}/role")
     public ResponseEntity<?> updateRole(@PathVariable String userId, @RequestBody Map<String, String> body) {
+        authorization.requireAdmin();
         String tenantId = tenantContextResolver.resolveClientId(null, body);
         String position = body.get("position");
         if (position == null || position.isBlank()) {
@@ -92,6 +103,7 @@ public class UserAccessController {
 
     @PutMapping("/api/tenant/users/{userId}/status")
     public ResponseEntity<?> updateStatus(@PathVariable String userId, @RequestBody Map<String, Object> body) {
+        authorization.requireAdmin();
         String tenantId = tenantContextResolver.resolveClientId(null, body);
         boolean active = Boolean.parseBoolean(String.valueOf(body.get("active")));
         try {
@@ -106,6 +118,7 @@ public class UserAccessController {
     public ResponseEntity<?> deleteUser(
             @PathVariable String userId,
             @RequestParam(required = false) String tenantId) {
+        authorization.requireAdmin();
         String resolvedTenantId = tenantContextResolver.resolveClientId(null, tenantId);
         try {
             userAccessService.deleteUser(resolvedTenantId, userId.trim());
@@ -156,6 +169,25 @@ public class UserAccessController {
                     );
                     return ResponseEntity.ok(Map.of("tables", tables, "source", "snowflake"));
                 }
+            }
+
+            if ("postgresql".equals(provider)) {
+                var cfg = cloudConnectionService.getPostgresConfig(resolvedTenantId);
+                if (cfg.isEmpty()) {
+                    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                            .body(Map.of("error",
+                                    "Active warehouse is PostgreSQL but connector config could not be loaded. Reconnect PostgreSQL."));
+                }
+                List<String> tables = postgresConnectorService.listTables(
+                        cfg.get().host(),
+                        cfg.get().port(),
+                        cfg.get().database(),
+                        cfg.get().schema(),
+                        cfg.get().username(),
+                        cfg.get().password(),
+                        cfg.get().ssl()
+                );
+                return ResponseEntity.ok(Map.of("tables", tables, "source", "postgresql"));
             }
 
             // Local PostgreSQL: list schema named after authenticated tenant key (not client schema spoof).

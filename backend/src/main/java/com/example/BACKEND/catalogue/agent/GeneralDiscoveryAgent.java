@@ -1,7 +1,10 @@
 package com.example.BACKEND.catalogue.agent;
 
 import com.example.BACKEND.catalogue.agent.executive.ColumnDiscoveryPlanner;
-import com.example.BACKEND.catalogue.agent.scale.AgentSqlHelper;import com.example.BACKEND.catalogue.agent.scale.ScaleAwareQueryExecutor;
+import com.example.BACKEND.catalogue.agent.executive.MetricEvidenceAnnotator;
+import com.example.BACKEND.catalogue.agent.executive.MetricSemantics;
+import com.example.BACKEND.catalogue.agent.scale.AgentSqlHelper;
+import com.example.BACKEND.catalogue.agent.scale.ScaleAwareQueryExecutor;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -134,17 +137,30 @@ public class GeneralDiscoveryAgent {
         List<Map<String, Object>> rows = queryExecutor.execute(sql, label, ctx);
         if (rows.isEmpty()) return 1;
 
-        double total = rows.stream().mapToDouble(r -> toDouble(r.get("segment_total"))).sum();
-        if (total <= 0) return 1;
+        MetricSemantics sem = MetricEvidenceAnnotator.semantics(ctx, metric);
+        double grand = MetricEvidenceAnnotator.fetchGrandTotal(
+                queryExecutor, ctx, metric, "DISCOVERY: grand total " + metric);
+        if (grand <= 0) return 1;
 
-        double topShare = toDouble(rows.get(0).get("segment_total")) / total * 100.0;
+        MetricEvidenceAnnotator.annotateSegmentRows(rows, "segment_total", grand, sem, metric);
+
+        double topShare = toDouble(rows.get(0).get(MetricEvidenceAnnotator.SHARE_OF_TOTAL));
         Map<String, Object> summary = new LinkedHashMap<>();
         summary.put("metric", metric);
         summary.put("dimension", dim);
         summary.put("top_segment", rows.get(0).get("segment"));
-        summary.put("top_share_pct", Math.round(topShare * 10.0) / 10.0);
+        summary.put("top_share_pct", topShare);
         summary.put("top_value", rows.get(0).get("segment_total"));
-        summary.put("total", total);
+        summary.put("total", grand);
+        summary.put(MetricEvidenceAnnotator.GRAND_TOTAL, grand);
+        summary.put(MetricEvidenceAnnotator.SHARE_OF_TOTAL, topShare);
+        summary.put(MetricEvidenceAnnotator.SEGMENT_COUNT, rows.size());
+        MetricEvidenceAnnotator.putSemantics(summary, sem, metric);
+
+        // Only emit concentration evidence when gate passes
+        if (!MetricEvidenceAnnotator.concentrationEvidenceOk(summary, rows.size())) {
+            return 1;
+        }
 
         out.add(new CollectedData(
                 "DISCOVERY: " + metric + " concentration " + dim,

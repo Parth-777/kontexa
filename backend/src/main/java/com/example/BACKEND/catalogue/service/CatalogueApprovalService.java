@@ -18,15 +18,20 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -42,6 +47,8 @@ import java.util.Set;
  */
 @Service
 public class CatalogueApprovalService {
+
+    private static final Logger log = LoggerFactory.getLogger(CatalogueApprovalService.class);
 
     private final ClientCatalogueRepository catalogueRepo;
     private final CatalogueSnapshotRepository snapshotRepo;
@@ -97,17 +104,10 @@ public class CatalogueApprovalService {
             System.out.println("[Approval] Star schema detection failed (non-fatal): " + e.getMessage());
         }
 
-        // Upsert snapshot — dual-write tenant_id + legacy client_id.
-        CatalogueSnapshotEntity snapshot = findSnapshotForCatalogue(catalogue)
-                .orElseGet(CatalogueSnapshotEntity::new);
-        snapshot.setCatalogueId(catalogue.getId());
-        snapshot.setClientId(catalogue.getClientId());
-        snapshot.setTenantId(catalogue.getTenantId());
-        snapshot.setCatalogueJson(serializeCatalogue(catalogue));
-        snapshot.setCreatedAt(LocalDateTime.now());
-        snapshotRepo.save(snapshot);
+        persistSnapshotForCatalogue(catalogue);
 
-        System.out.println("[Approval] Snapshot written for client: " + catalogue.getClientId());
+        System.out.println("[Approval] Snapshot written for client: " + catalogue.getClientId()
+                + " catalogueId=" + catalogue.getId());
 
         try {
             tenantBusinessProfileService.inferFromCatalogue(catalogue);
@@ -279,14 +279,53 @@ public class CatalogueApprovalService {
     }
 
     /**
-     * Fetch the approved snapshot JSON for a client.
-     * Used by the query engine — returns the raw JSON string.
+     * Single choke point for Deep Analysis / query-engine snapshot JSON.
+     * Resolves the active APPROVED catalogue first, then that catalogue's snapshot.
      */
+    @Transactional(readOnly = true)
     public String getApprovedSnapshot(String clientId) {
-        return snapshotRepo.findByClientId(clientId)
-                .map(CatalogueSnapshotEntity::getCatalogueJson)
+        ClientCatalogueEntity active = requireActiveApprovedCatalogue(clientId);
+        CatalogueSnapshotEntity snapshot = findSnapshotForActiveCatalogue(active);
+        String json;
+        Long snapshotId = null;
+        Long snapshotCatalogueId = null;
+        if (snapshot != null) {
+            json = snapshot.getCatalogueJson();
+            snapshotId = snapshot.getId();
+            snapshotCatalogueId = snapshot.getCatalogueId();
+        } else {
+            log.warn("[catalogue-retrieval] no matching snapshot for active catalogueId={} — serializing entity",
+                    active.getId());
+            json = serializeCatalogue(active);
+        }
+        logRetrieval(clientId, active, snapshotId, snapshotCatalogueId, json);
+        return json;
+    }
+
+    /**
+     * Canonical runtime selection: newest APPROVED catalogue for the tenant.
+     * UUID-scoped when {@link TenantContext} is bound; otherwise slug/client-id.
+     * Historical APPROVED rows are not deleted.
+     */
+    @Transactional(readOnly = true)
+    public ClientCatalogueEntity requireActiveApprovedCatalogue(String tenantKey) {
+        TenantContext ctx = TenantContextHolder.get();
+        List<ClientCatalogueEntity> candidates;
+        if (ctx != null) {
+            candidates = listForTenant(ctx);
+            if (candidates.isEmpty() && tenantKey != null && !tenantKey.isBlank()) {
+                candidates = listForClient(tenantKey);
+            }
+        } else if (tenantKey != null && !tenantKey.isBlank()) {
+            candidates = listForClient(tenantKey);
+        } else {
+            candidates = List.of();
+        }
+        return pickLatestApproved(candidates)
                 .orElseThrow(() -> new IllegalStateException(
-                        "No approved catalogue found for client: " + clientId));
+                        "No approved catalogue found for tenant: "
+                                + (tenantKey == null ? "(none)" : tenantKey)
+                                + ". Please approve a catalogue in the admin dashboard."));
     }
 
     /**
@@ -364,6 +403,15 @@ public class CatalogueApprovalService {
                     colNode.put("businessMeaning",   col.getBusinessMeaning()   != null ? col.getBusinessMeaning()   : "");
                     colNode.put("comparisonPeriod",  col.getComparisonPeriod()  != null ? col.getComparisonPeriod()  : "NONE");
                     colNode.put("dateGranularity",   col.getDateGranularity()   != null ? col.getDateGranularity()   : "N/A");
+                    if (col.getDisplayUnit() != null && !col.getDisplayUnit().isBlank()) {
+                        colNode.put("displayUnit", col.getDisplayUnit());
+                    }
+                    if (col.getScaleToCanonical() != null) {
+                        colNode.put("scaleToCanonical", col.getScaleToCanonical());
+                    }
+                    if (col.getGrainLabel() != null && !col.getGrainLabel().isBlank()) {
+                        colNode.put("grainLabel", col.getGrainLabel());
+                    }
                     if (col.getConfidence() != null) {
                         colNode.put("confidence", col.getConfidence());
                     }
@@ -395,26 +443,129 @@ public class CatalogueApprovalService {
     }
 
     private void upsertSnapshot(ClientCatalogueEntity catalogue) {
-        CatalogueSnapshotEntity snapshot = findSnapshotForCatalogue(catalogue)
+        persistSnapshotForCatalogue(catalogue);
+    }
+
+    /**
+     * Publish this catalogue into the unique snapshot slot for the workspace.
+     * Latest approve wins: if a snapshot already exists for this client/tenant,
+     * update that row in place (never INSERT a second row — unique client_id /
+     * tenant_id would fail and Hibernate IDENTITY would leave a null id).
+     */
+    private void persistSnapshotForCatalogue(ClientCatalogueEntity catalogue) {
+        CatalogueSnapshotEntity snapshot = findSnapshotToWrite(catalogue)
                 .orElseGet(CatalogueSnapshotEntity::new);
+        Long previousCatalogueId = snapshot.getCatalogueId();
+        applySnapshotIdentity(snapshot, catalogue);
+        snapshotRepo.save(snapshot);
+        if (previousCatalogueId != null && !previousCatalogueId.equals(catalogue.getId())) {
+            log.info("[catalogue-retrieval] replaced snapshot slot snapshotId={} from catalogueId={} to catalogueId={}",
+                    snapshot.getId(), previousCatalogueId, catalogue.getId());
+        }
+    }
+
+    private void applySnapshotIdentity(CatalogueSnapshotEntity snapshot, ClientCatalogueEntity catalogue) {
         snapshot.setCatalogueId(catalogue.getId());
         snapshot.setClientId(catalogue.getClientId());
         snapshot.setTenantId(catalogue.getTenantId());
         snapshot.setCatalogueJson(serializeCatalogue(catalogue));
         snapshot.setCreatedAt(LocalDateTime.now());
-        snapshotRepo.save(snapshot);
     }
 
-    private java.util.Optional<CatalogueSnapshotEntity> findSnapshotForCatalogue(
-            ClientCatalogueEntity catalogue) {
+    /**
+     * Snapshot row to update on approve: same catalogue_id first, otherwise the
+     * existing unique client/tenant slot so the latest approve replaces it.
+     */
+    private Optional<CatalogueSnapshotEntity> findSnapshotToWrite(ClientCatalogueEntity catalogue) {
+        if (catalogue.getId() != null) {
+            Optional<CatalogueSnapshotEntity> byCatalogue =
+                    snapshotRepo.findFirstByCatalogueIdOrderByIdDesc(catalogue.getId());
+            if (byCatalogue.isPresent()) {
+                return byCatalogue;
+            }
+        }
         if (catalogue.getTenantId() != null) {
-            java.util.Optional<CatalogueSnapshotEntity> byTenant =
+            Optional<CatalogueSnapshotEntity> byTenant =
                     snapshotRepo.findByTenantId(catalogue.getTenantId());
             if (byTenant.isPresent()) {
                 return byTenant;
             }
         }
-        return snapshotRepo.findByClientId(catalogue.getClientId());
+        if (catalogue.getClientId() != null && !catalogue.getClientId().isBlank()) {
+            return snapshotRepo.findByClientId(catalogue.getClientId());
+        }
+        return Optional.empty();
+    }
+
+    private CatalogueSnapshotEntity findSnapshotForActiveCatalogue(ClientCatalogueEntity active) {
+        Optional<CatalogueSnapshotEntity> byCatalogue =
+                snapshotRepo.findFirstByCatalogueIdOrderByIdDesc(active.getId());
+        if (byCatalogue.isPresent()) {
+            return byCatalogue.get();
+        }
+        Optional<CatalogueSnapshotEntity> legacy = Optional.empty();
+        if (active.getTenantId() != null) {
+            legacy = snapshotRepo.findByTenantId(active.getTenantId());
+        }
+        if (legacy.isEmpty() && active.getClientId() != null) {
+            legacy = snapshotRepo.findByClientId(active.getClientId());
+        }
+        if (legacy.isPresent() && active.getId().equals(legacy.get().getCatalogueId())) {
+            return legacy.get();
+        }
+        if (legacy.isPresent()) {
+            log.warn("[catalogue-retrieval] ignoring stale snapshot id={} snapshotCatalogueId={} activeCatalogueId={}",
+                    legacy.get().getId(), legacy.get().getCatalogueId(), active.getId());
+        }
+        return null;
+    }
+
+    private Optional<ClientCatalogueEntity> pickLatestApproved(List<ClientCatalogueEntity> catalogues) {
+        if (catalogues == null || catalogues.isEmpty()) {
+            return Optional.empty();
+        }
+        return catalogues.stream()
+                .filter(c -> c != null && "APPROVED".equalsIgnoreCase(c.getStatus()))
+                .max(Comparator.comparing(
+                        c -> c.getUpdatedAt() != null ? c.getUpdatedAt() : c.getCreatedAt()));
+    }
+
+    private void logRetrieval(
+            String tenantKey,
+            ClientCatalogueEntity active,
+            Long snapshotId,
+            Long snapshotCatalogueId,
+            String json
+    ) {
+        TenantContext ctx = TenantContextHolder.get();
+        log.info("[catalogue-retrieval] slug={} tenantUuid={} catalogueId={} status={} updatedAt={} "
+                        + "snapshotId={} snapshotCatalogueId={} tables={}",
+                tenantKey,
+                ctx != null ? ctx.tenantId() : (active.getTenantId() != null ? active.getTenantId() : ""),
+                active.getId(),
+                active.getStatus(),
+                active.getUpdatedAt(),
+                snapshotId,
+                snapshotCatalogueId,
+                tableNamesFromSnapshotJson(json));
+    }
+
+    private String tableNamesFromSnapshotJson(String json) {
+        try {
+            JsonNode tables = objectMapper.readTree(json == null ? "{}" : json).path("tables");
+            if (!tables.isArray()) {
+                return "[]";
+            }
+            List<String> names = new ArrayList<>();
+            for (JsonNode table : tables) {
+                String schema = table.path("tableSchema").asText("");
+                String name = table.path("tableName").asText("");
+                names.add(schema.isBlank() ? name : schema + "." + name);
+            }
+            return names.toString();
+        } catch (Exception e) {
+            return "[]";
+        }
     }
 
     private void applyTableUpdates(ClientCatalogueEntity catalogue, List<Map<String, Object>> tableUpdates) {

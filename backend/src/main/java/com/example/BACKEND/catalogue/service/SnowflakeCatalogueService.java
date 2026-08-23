@@ -25,6 +25,8 @@ public class SnowflakeCatalogueService {
     }
 
     public CatalogueResult discover(TenantCloudConnectionService.SnowflakeConfig config, boolean withSampling) {
+        requireCredentials(config);
+
         CatalogueResult result = new CatalogueResult();
         result.setDatabaseName(config.database());
         result.setSchemaName(config.schema());
@@ -33,12 +35,18 @@ public class SnowflakeCatalogueService {
                 config.account(), config.warehouse(), config.database(),
                 config.schema(), config.username(), config.password()
         );
+        System.out.println("[SnowflakeCatalogue] Discovered " + tableNames.size()
+                + " tables in " + config.database() + "." + config.schema());
 
         for (String tableName : tableNames) {
             TableInfo tableInfo = new TableInfo(tableName, config.schema());
             List<DiscoveredField> discovered = discoverTableFields(config, tableName);
             if (discovered.isEmpty()) {
                 discovered = discoverFlatColumns(config, tableName);
+            }
+            if (discovered.isEmpty()) {
+                System.out.println("[SnowflakeCatalogue] WARNING: no columns found for table " + tableName
+                        + " (DESCRIBE and INFORMATION_SCHEMA both empty)");
             }
             for (DiscoveredField field : discovered) {
                 ColumnInfo col = toColumnInfo(field);
@@ -56,12 +64,28 @@ public class SnowflakeCatalogueService {
         return result;
     }
 
+    private static void requireCredentials(TenantCloudConnectionService.SnowflakeConfig config) {
+        if (config == null) {
+            throw new IllegalArgumentException("Snowflake connector config is required");
+        }
+        if (isBlank(config.account()) || isBlank(config.warehouse()) || isBlank(config.database())
+                || isBlank(config.username()) || isBlank(config.password())) {
+            throw new IllegalArgumentException(
+                    "Snowflake connector is incomplete (account/warehouse/database/username/password). Reconnect Snowflake.");
+        }
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
     private List<DiscoveredField> discoverTableFields(
             TenantCloudConnectionService.SnowflakeConfig config,
             String tableName
     ) {
-        String qualifiedTable = config.schema().toUpperCase() + ".\"" + tableName + "\"";
-        String sql = "DESCRIBE TABLE " + qualifiedTable;
+        // Prefer unquoted upper identifiers for standard Snowflake objects; fall back to quoted name.
+        String schema = config.schema() == null ? "PUBLIC" : config.schema().trim().toUpperCase();
+        String sql = "DESCRIBE TABLE " + schema + "." + quoteIdent(tableName);
         try {
             List<Map<String, Object>> rows = connectorService.executeSelect(
                     config.account(), config.warehouse(), config.database(),
@@ -78,8 +102,16 @@ public class SnowflakeCatalogueService {
             }
             return NestedSchemaDiscoverer.discoverSnowflakeDescribeRows(describeRows);
         } catch (Exception ex) {
+            System.out.println("[SnowflakeCatalogue] DESCRIBE failed for " + tableName + ": " + ex.getMessage());
             return List.of();
         }
+    }
+
+    private static String quoteIdent(String ident) {
+        if (ident == null || ident.isBlank()) {
+            return "\"\"";
+        }
+        return "\"" + ident.replace("\"", "") + "\"";
     }
 
     private List<DiscoveredField> discoverFlatColumns(
@@ -130,12 +162,15 @@ public class SnowflakeCatalogueService {
                     config.schema(), config.username(), config.password(), sql
             );
         } catch (Exception ex) {
+            System.out.println("[SnowflakeCatalogue] INFORMATION_SCHEMA.COLUMNS failed for "
+                    + tableName + ": " + ex.getMessage());
             return List.of();
         }
     }
 
     private long fetchRowCount(TenantCloudConnectionService.SnowflakeConfig config, String tableName) {
-        String qualifiedTable = config.schema().toUpperCase() + ".\"" + tableName + "\"";
+        String schema = config.schema() == null ? "PUBLIC" : config.schema().trim().toUpperCase();
+        String qualifiedTable = schema + "." + quoteIdent(tableName);
         String sql = "SELECT COUNT(*) AS CNT FROM " + qualifiedTable;
         try {
             List<Map<String, Object>> rows = connectorService.executeSelect(
@@ -155,7 +190,8 @@ public class SnowflakeCatalogueService {
     ) {
         String type = col.getDataType().toLowerCase();
         String qualifiedCol = quoteSnowflakePath(col.getColumnName());
-        String qualifiedTable = config.schema().toUpperCase() + ".\"" + tableName + "\"";
+        String schema = config.schema() == null ? "PUBLIC" : config.schema().trim().toUpperCase();
+        String qualifiedTable = schema + "." + quoteIdent(tableName);
 
         try {
             if (isTextType(type)) {

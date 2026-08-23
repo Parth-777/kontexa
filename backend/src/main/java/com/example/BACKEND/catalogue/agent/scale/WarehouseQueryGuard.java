@@ -75,7 +75,9 @@ public class WarehouseQueryGuard {
         }
 
         boolean isBQ = "bigquery".equalsIgnoreCase(ctx.provider());
-        String dateRef = isBQ ? "`" + window.dateColumn() + "`" : window.dateColumn();
+        String dateRef = isBQ
+                ? AgentSqlHelper.qualify(window.dateColumn(), ctx.provider())
+                : window.dateColumn();
         String whereClause = window.whereClause(dateRef, ctx.provider());
 
         // Insert WHERE before LIMIT — appending after LIMIT produces invalid SQL

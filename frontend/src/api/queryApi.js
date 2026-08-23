@@ -1,118 +1,128 @@
-import { getAuthHeaders } from './session';
+import { getAuthHeaders, readJsonOrThrow } from './session';
 
 const BASE_URL = 'http://localhost:5000';
+
+/** Used by legacy QueryPage — protected list of workspace client keys. */
+export async function fetchActiveClients() {
+  const response = await fetch(`${BASE_URL}/api/catalogue/list`, {
+    headers: getAuthHeaders(),
+  });
+  const catalogues = await readJsonOrThrow(response, 'Failed to load clients');
+  const clients = Array.isArray(catalogues)
+    ? [...new Set(catalogues.map((c) => c.clientId).filter(Boolean))]
+    : [];
+  return { clients };
+}
 
 export async function askQuestion(clientId, question, skipClarification = false, history = []) {
   const response = await fetch(`${BASE_URL}/api/query/ask`, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json',
+      ...getAuthHeaders(),
       'X-Client-Id': clientId,
     },
     body: JSON.stringify({ question, skipClarification, history }),
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Something went wrong');
-  return payload;
+  return readJsonOrThrow(response, 'Something went wrong');
 }
 
 export async function getReports(clientId, type) {
   const params = type ? `?type=${type}` : '';
   const response = await fetch(`${BASE_URL}/api/agent/reports${params}`, {
-    headers: { 'X-Client-Id': clientId },
+    headers: {
+      ...getAuthHeaders(),
+      'X-Client-Id': clientId,
+    },
   });
-  const payload = await response.json().catch(() => ([]));
-  if (!response.ok) throw new Error(payload.error || 'Failed to load reports');
-  return payload;
+  const payload = await readJsonOrThrow(response, 'Failed to load reports');
+  return Array.isArray(payload) ? payload : [];
 }
 
 export async function generateReport(clientId, type = 'WEEKLY') {
   const response = await fetch(`${BASE_URL}/api/agent/reports/generate`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Client-Id': clientId },
+    headers: {
+      ...getAuthHeaders(),
+      'X-Client-Id': clientId,
+    },
     body: JSON.stringify({ type }),
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Report generation failed');
-  return payload;
+  return readJsonOrThrow(response, 'Report generation failed');
 }
 
 export async function runAgentDashboard(clientId) {
   const response = await fetch(`${BASE_URL}/api/agent/dashboard`, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json',
+      ...getAuthHeaders(),
       'X-Client-Id': clientId,
     },
     body: JSON.stringify({}),
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Agent analysis failed');
-  return payload;
+  return readJsonOrThrow(response, 'Agent analysis failed');
 }
-
 
 export async function getPersistedInsights(clientId) {
   const response = await fetch(`${BASE_URL}/api/agent/insights`, {
-    headers: { 'X-Client-Id': clientId },
+    headers: {
+      ...getAuthHeaders(),
+      'X-Client-Id': clientId,
+    },
   });
-  const payload = await response.json().catch(() => ([]));
-  if (!response.ok) throw new Error(payload.error || 'Failed to load insights');
-  return payload;
+  const payload = await readJsonOrThrow(response, 'Failed to load insights');
+  return Array.isArray(payload) ? payload : [];
 }
 
 export async function getAgentCharts(clientId) {
   const response = await fetch(`${BASE_URL}/api/agent/charts`, {
-    headers: { 'X-Client-Id': clientId },
+    headers: {
+      ...getAuthHeaders(),
+      'X-Client-Id': clientId,
+    },
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Failed to load charts');
-  return payload;
+  return readJsonOrThrow(response, 'Failed to load charts');
 }
 
 export async function generateChartFromRequest(clientId, request) {
   const response = await fetch(`${BASE_URL}/api/agent/charts/generate`, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json',
+      ...getAuthHeaders(),
       'X-Client-Id': clientId,
     },
     body: JSON.stringify({ request }),
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    if (response.status === 404) {
-      throw new Error('Chart API not available — restart the backend (port 5000) to load the latest code.');
-    }
-    throw new Error(payload.error || payload.message || `Chart generation failed (${response.status})`);
+  if (!response.ok && response.status === 404) {
+    throw new Error('Chart API not available — restart the backend (port 5000) to load the latest code.');
   }
-  return payload;
+  return readJsonOrThrow(response, 'Chart generation failed');
 }
 
 export async function getFollowUpQuestions(clientId) {
   const response = await fetch(
     `${BASE_URL}/api/agent/insights/followup?clientId=${encodeURIComponent(clientId)}`,
-    { headers: { 'X-Client-Id': clientId } }
+    {
+      headers: {
+        ...getAuthHeaders(),
+        'X-Client-Id': clientId,
+      },
+    }
   );
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Failed to load follow-up questions');
-  return payload;
+  return readJsonOrThrow(response, 'Failed to load follow-up questions');
 }
 
 export async function updateInsightStatus(clientId, cardId, status, dismissReason = null) {
   const response = await fetch(`${BASE_URL}/api/agent/insights/${cardId}/status`, {
     method: 'PATCH',
     headers: {
-      'Content-Type': 'application/json',
+      ...getAuthHeaders(),
       'X-Client-Id': clientId,
     },
     body: JSON.stringify(
       dismissReason ? { status, dismissReason } : { status }
     ),
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Failed to update insight');
-  return payload;
+  return readJsonOrThrow(response, 'Failed to update insight');
 }
 
 export async function runDecisionAnalysis(tenantId, question) {
@@ -124,25 +134,21 @@ export async function runDecisionAnalysis(tenantId, question) {
     },
     body: JSON.stringify({ question, tenantId }),
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Decision analysis failed');
-  return payload;
+  return readJsonOrThrow(response, 'Decision analysis failed');
 }
 
 export async function fetchPlannerStatus() {
   const response = await fetch(`${BASE_URL}/api/decision/v1/planner/status`, {
     headers: { ...getAuthHeaders() },
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Failed to load planner status');
-  return payload;
+  return readJsonOrThrow(response, 'Failed to load planner status');
 }
 
 export async function fetchTablesForSchema(schema, tenantId) {
   const params = new URLSearchParams({ schema });
   if (tenantId) params.append('tenantId', tenantId);
-  const response = await fetch(`${BASE_URL}/api/user/tables?${params.toString()}`);
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Failed to load tables');
-  return payload;
+  const response = await fetch(`${BASE_URL}/api/user/tables?${params.toString()}`, {
+    headers: getAuthHeaders(),
+  });
+  return readJsonOrThrow(response, 'Failed to load tables');
 }

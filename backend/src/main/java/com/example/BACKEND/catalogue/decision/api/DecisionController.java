@@ -6,6 +6,7 @@ import com.example.BACKEND.catalogue.decision.runtime.DecisionRuntimeException;
 import com.example.BACKEND.catalogue.investigation.Phase2InvestigationPathTrace;
 import com.example.BACKEND.catalogue.semantic.phase2.SemanticPlanningProperties;
 import com.example.BACKEND.catalogue.semantic.phase2.SemanticShadowResponseMapper;
+import com.example.BACKEND.identity.auth.AuthorizationService;
 import com.example.BACKEND.identity.auth.ForbiddenException;
 import com.example.BACKEND.tenancy.TenantContext;
 import com.example.BACKEND.tenancy.TenantContextHolder;
@@ -37,17 +38,20 @@ public class DecisionController {
     private final DecisionResponseMapper responseMapper;
     private final SemanticPlanningProperties plannerProperties;
     private final SemanticShadowResponseMapper shadowResponseMapper;
+    private final AuthorizationService authorization;
 
     public DecisionController(
             DecisionRuntime runtime,
             DecisionResponseMapper responseMapper,
             SemanticPlanningProperties plannerProperties,
-            SemanticShadowResponseMapper shadowResponseMapper
+            SemanticShadowResponseMapper shadowResponseMapper,
+            AuthorizationService authorization
     ) {
         this.runtime = runtime;
         this.responseMapper = responseMapper;
         this.plannerProperties = plannerProperties;
         this.shadowResponseMapper = shadowResponseMapper;
+        this.authorization = authorization;
     }
 
     /**
@@ -67,6 +71,7 @@ public class DecisionController {
             @RequestBody Map<String, Object> body,
             @RequestHeader(value = "X-Client-Id", required = false) String headerTenantId
     ) {
+        authorization.requireCanQuery();
         String question = stringField(body, "question");
         if (question == null || question.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "question is required"));

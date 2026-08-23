@@ -7,18 +7,21 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
- * Ranks insight candidates by materiality; keeps top N for executive inbox.
+ * Ranks insight candidates by business-relative materiality (not raw unit magnitude).
  */
 @Component
 public class MaterialityRanker {
 
-    /** Minimum insight cards shown per refresh (executive inbox). */
     public static final int MIN_INSIGHT_CARDS = 3;
     private static final int TOP_N = 5;
+    private static final Pattern PCT = Pattern.compile("(\\d+(?:\\.\\d+)?)%");
 
     private final DecisionMemoryService decisionMemoryService;
 
@@ -33,32 +36,23 @@ public class MaterialityRanker {
 
         if (candidates == null || candidates.isEmpty()) return List.of();
 
-        int topN = TOP_N;
-        boolean hasHighAlert = candidates.stream()
-                .anyMatch(c -> "ALERT".equals(c.badge()) && "HIGH".equals(c.impactLevel()));
-        if (hasHighAlert && candidates.size() > MIN_INSIGHT_CARDS) {
-            topN = TOP_N;
-        }
-
         List<InsightCandidate> ranked = candidates.stream()
                 .map(c -> scoreWithMemory(c, clientId, baseConfidence))
                 .sorted(Comparator.comparingDouble(InsightCandidate::impactScore).reversed())
                 .collect(Collectors.toList());
 
-        return selectDiverse(ranked, topN);
+        return selectDiverse(ranked, TOP_N);
     }
 
-    /**
-     * Prefer insights from different columns/topics — avoid three cards on the same flag column.
-     */
     private List<InsightCandidate> selectDiverse(List<InsightCandidate> ranked, int topN) {
         List<InsightCandidate> picked = new ArrayList<>();
         Set<String> usedTopics = new HashSet<>();
 
+        // Prefer distinct topics first (never fill min with duplicates when alternatives exist)
         for (InsightCandidate c : ranked) {
             if (picked.size() >= topN) break;
             String topic = topicKey(c);
-            if (picked.size() < MIN_INSIGHT_CARDS || !usedTopics.contains(topic)) {
+            if (!usedTopics.contains(topic)) {
                 picked.add(c);
                 usedTopics.add(topic);
             }
@@ -75,10 +69,10 @@ public class MaterialityRanker {
 
     private String topicKey(InsightCandidate c) {
         if (c.sourceColumns() != null && !c.sourceColumns().isEmpty()) {
-            return c.sourceColumns().get(0).toLowerCase();
+            return c.sourceColumns().get(0).toLowerCase(Locale.ROOT);
         }
         if (c.evidenceRefs() != null && !c.evidenceRefs().isEmpty()) {
-            String ref = c.evidenceRefs().get(0).toLowerCase();
+            String ref = c.evidenceRefs().get(0).toLowerCase(Locale.ROOT);
             if (ref.contains(" by ")) {
                 int idx = ref.lastIndexOf(" by ");
                 return ref.substring(idx + 4).trim();
@@ -90,17 +84,25 @@ public class MaterialityRanker {
             return ref;
         }
         if (c.driverSegment() != null && !c.driverSegment().isBlank()) {
-            return c.lens().name() + ":" + c.driverSegment().toLowerCase();
+            return c.lens().name() + ":" + c.driverSegment().toLowerCase(Locale.ROOT);
         }
         return c.lens().name() + ":" + (c.claim() != null ? c.claim().length() : 0);
     }
 
     private InsightCandidate scoreWithMemory(InsightCandidate c, String clientId, int baseConfidence) {
-        double score = c.impactScore();
+        // Bound incoming lens scores — treat as relative signal, not raw magnitude
+        double relative = Math.min(50, Math.max(0, c.impactScore()));
+        // Prefer share/% language when present in the claim
+        relative = Math.max(relative, extractShareBoost(c.claim()));
+
+        double score = relative;
         score += badgeWeight(c.badge());
         score += impactWeight(c.impactLevel());
-        if (c.lens() == InsightLens.GENERAL) score += 8;
-        if (c.lens() == InsightLens.REVENUE) score += 12;
+        // Small, equal-ish lens prior — do not privilege revenue magnitude
+        if (c.lens() == InsightLens.GENERAL) score += 4;
+        if (c.lens() == InsightLens.REVENUE) score += 4;
+        if (c.lens() == InsightLens.GROWTH) score += 4;
+        if (c.lens() == InsightLens.RISK) score += 5;
 
         int adjusted = decisionMemoryService.adjustConfidence(
                 clientId, c.badge(), c.lens().agentLabel(), baseConfidence);
@@ -113,10 +115,24 @@ public class MaterialityRanker {
                 c.suggestedOwner(), c.driverSegment());
     }
 
+    private double extractShareBoost(String claim) {
+        if (claim == null) return 0;
+        Matcher m = PCT.matcher(claim);
+        double best = 0;
+        while (m.find()) {
+            try {
+                best = Math.max(best, Double.parseDouble(m.group(1)));
+            } catch (NumberFormatException ignored) {
+                // skip
+            }
+        }
+        return Math.min(45, best);
+    }
+
     private double badgeWeight(String badge) {
         if (badge == null) return 0;
         return switch (badge) {
-            case "ALERT" -> 25;
+            case "ALERT" -> 20;
             case "RISK" -> 15;
             case "OPPORTUNITY" -> 12;
             default -> 3;

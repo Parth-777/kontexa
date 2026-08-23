@@ -9,12 +9,16 @@ import com.example.BACKEND.catalogue.service.CatalogueStorageService;
 import com.example.BACKEND.catalogue.service.DataSamplerService;
 import com.example.BACKEND.catalogue.service.SchemaDiscoveryService;
 import com.example.BACKEND.catalogue.service.BigQueryCatalogueService;
+import com.example.BACKEND.catalogue.service.PostgresCatalogueService;
 import com.example.BACKEND.catalogue.service.SnowflakeCatalogueService;
+import com.example.BACKEND.identity.auth.AuthorizationService;
 import com.example.BACKEND.tenant.TenantCloudConnectionService;
 import com.example.BACKEND.tenant.TenantContextResolver;
 import com.example.BACKEND.tenancy.TenantContext;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
 import java.util.Map;
@@ -36,7 +40,9 @@ public class CatalogueController {
     private final TenantCloudConnectionService cloudConnectionService;
     private final BigQueryCatalogueService bigQueryCatalogueService;
     private final SnowflakeCatalogueService snowflakeCatalogueService;
+    private final PostgresCatalogueService postgresCatalogueService;
     private final TenantContextResolver tenantContextResolver;
+    private final AuthorizationService authorization;
 
     public CatalogueController(SchemaDiscoveryService schemaDiscovery,
                                 DataSamplerService dataSampler,
@@ -46,7 +52,9 @@ public class CatalogueController {
                                 TenantCloudConnectionService cloudConnectionService,
                                 BigQueryCatalogueService bigQueryCatalogueService,
                                 SnowflakeCatalogueService snowflakeCatalogueService,
-                                TenantContextResolver tenantContextResolver) {
+                                PostgresCatalogueService postgresCatalogueService,
+                                TenantContextResolver tenantContextResolver,
+                                AuthorizationService authorization) {
         this.schemaDiscovery = schemaDiscovery;
         this.dataSampler = dataSampler;
         this.enrichmentService = enrichmentService;
@@ -55,13 +63,16 @@ public class CatalogueController {
         this.cloudConnectionService = cloudConnectionService;
         this.bigQueryCatalogueService = bigQueryCatalogueService;
         this.snowflakeCatalogueService = snowflakeCatalogueService;
+        this.postgresCatalogueService = postgresCatalogueService;
         this.tenantContextResolver = tenantContextResolver;
+        this.authorization = authorization;
     }
 
     @PostMapping("/discover")
     public ResponseEntity<CatalogueResult> discover(
             @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
             @RequestBody Map<String, String> body) {
+        authorization.requireAdmin();
         String tenantKey = tenantContextResolver.resolveClientId(clientIdHeader, body);
         // Local PG discovery is pinned to the authenticated tenant key.
         // Body "schema" is never used as ownership authority.
@@ -82,6 +93,7 @@ public class CatalogueController {
     public ResponseEntity<CatalogueResult> build(
             @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
             @RequestBody Map<String, String> body) {
+        authorization.requireAdmin();
         String tenantKey = tenantContextResolver.resolveClientId(clientIdHeader, body);
         String schema = tenantKey;
         System.out.println("[Catalogue] Starting catalogue build for tenant=" + tenantKey);
@@ -103,6 +115,7 @@ public class CatalogueController {
     public ResponseEntity<CatalogueResult> buildFull(
             @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
             @RequestBody Map<String, String> body) {
+        authorization.requireAdmin();
         String tenantKey = tenantContextResolver.resolveClientId(clientIdHeader, body);
         String schema = tenantKey;
         System.out.println("[Catalogue] Starting FULL catalogue build for tenant=" + tenantKey);
@@ -134,7 +147,8 @@ public class CatalogueController {
     private record CloudConnectorConfig(
             String provider,
             TenantCloudConnectionService.BigQueryConfig bigQuery,
-            TenantCloudConnectionService.SnowflakeConfig snowflake
+            TenantCloudConnectionService.SnowflakeConfig snowflake,
+            TenantCloudConnectionService.PostgresConfig postgres
     ) {}
 
     private java.util.Optional<CloudConnectorConfig> resolveCloud(String tenantKey) {
@@ -143,22 +157,60 @@ public class CatalogueController {
         }
         String provider = cloudConnectionService.getProvider(tenantKey);
         if ("bigquery".equals(provider)) {
-            return cloudConnectionService.getBigQueryConfig(tenantKey)
-                    .map(cfg -> new CloudConnectorConfig("bigquery", cfg, null));
+            return java.util.Optional.of(new CloudConnectorConfig(
+                    "bigquery",
+                    cloudConnectionService.getBigQueryConfig(tenantKey)
+                            .orElseThrow(() -> new ResponseStatusException(
+                                    HttpStatus.BAD_REQUEST,
+                                    "Active warehouse is BigQuery but connector config could not be loaded. Reconnect BigQuery.")),
+                    null,
+                    null));
         }
         if ("snowflake".equals(provider)) {
-            return cloudConnectionService.getSnowflakeConfig(tenantKey)
-                    .map(cfg -> new CloudConnectorConfig("snowflake", null, cfg));
+            return java.util.Optional.of(new CloudConnectorConfig(
+                    "snowflake",
+                    null,
+                    cloudConnectionService.getSnowflakeConfig(tenantKey)
+                            .orElseThrow(() -> new ResponseStatusException(
+                                    HttpStatus.BAD_REQUEST,
+                                    "Active warehouse is Snowflake but connector config could not be loaded. Reconnect Snowflake.")),
+                    null));
+        }
+        if ("postgresql".equals(provider)) {
+            return java.util.Optional.of(new CloudConnectorConfig(
+                    "postgresql",
+                    null,
+                    null,
+                    cloudConnectionService.getPostgresConfig(tenantKey)
+                            .orElseThrow(() -> new ResponseStatusException(
+                                    HttpStatus.BAD_REQUEST,
+                                    "Active warehouse is PostgreSQL but connector config could not be loaded. Reconnect PostgreSQL."))));
         }
         return java.util.Optional.empty();
     }
 
     private CatalogueResult discoverFromCloud(CloudConnectorConfig cc, boolean withSampling) {
-        return switch (cc.provider()) {
-            case "bigquery"  -> bigQueryCatalogueService.discover(cc.bigQuery(),   withSampling);
-            case "snowflake" -> snowflakeCatalogueService.discover(cc.snowflake(), withSampling);
-            default -> throw new IllegalStateException("Unknown cloud provider: " + cc.provider());
-        };
+        try {
+            return switch (cc.provider()) {
+                case "bigquery"    -> bigQueryCatalogueService.discover(cc.bigQuery(),   withSampling);
+                case "snowflake"   -> snowflakeCatalogueService.discover(cc.snowflake(), withSampling);
+                case "postgresql"  -> postgresCatalogueService.discover(cc.postgres(),   withSampling);
+                default -> throw new IllegalStateException("Unknown cloud provider: " + cc.provider());
+            };
+        } catch (ResponseStatusException ex) {
+            throw ex;
+        } catch (IllegalArgumentException | IllegalStateException ex) {
+            System.err.println("[Catalogue] Discovery rejected: " + ex.getMessage());
+            ex.printStackTrace();
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage(), ex);
+        } catch (RuntimeException ex) {
+            System.err.println("[Catalogue] Warehouse discovery failed: " + ex.getMessage());
+            ex.printStackTrace();
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Warehouse discovery failed: " + ex.getMessage(),
+                    ex);
+        }
     }
 
     @PostMapping("/save")
@@ -166,7 +218,7 @@ public class CatalogueController {
             @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
             @RequestParam(required = false) String clientId,
             @RequestBody CatalogueResult result) {
-
+        authorization.requireAdmin();
         TenantContext ctx = tenantContextResolver.resolveContext(clientIdHeader, clientId);
         System.out.println("[Catalogue] Saving catalogue for tenant=" + ctx.tenantId()
                 + " slug=" + ctx.legacyTenantKey());
@@ -188,6 +240,7 @@ public class CatalogueController {
             @PathVariable Long id,
             @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
             @RequestParam(required = false) String clientId) {
+        authorization.requireAdmin();
         TenantContext ctx = tenantContextResolver.resolveContext(clientIdHeader, clientId);
         ClientCatalogueEntity approved = approvalService.approve(id, ctx.legacyTenantKey());
         System.out.println("[Catalogue] Approved catalogue id=" + id);
@@ -203,6 +256,7 @@ public class CatalogueController {
             @PathVariable Long id,
             @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
             @RequestParam(required = false) String clientId) {
+        authorization.requireAdmin();
         TenantContext ctx = tenantContextResolver.resolveContext(clientIdHeader, clientId);
         ClientCatalogueEntity rejected = approvalService.reject(id, ctx.legacyTenantKey());
         return ResponseEntity.ok(Map.of(
@@ -285,6 +339,7 @@ public class CatalogueController {
             @RequestParam(required = false) String tenantId,
             @RequestParam(required = false) String tenantSchema,
             @RequestBody Map<String, Object> body) {
+        authorization.requireAdmin();
         TenantContext ctx = tenantContextResolver.resolveContext(
                 clientIdHeader, clientId, tenantId, tenantSchema);
         @SuppressWarnings("unchecked")
@@ -312,19 +367,33 @@ public class CatalogueController {
                     m.put("role", col.getRole() == null ? "" : col.getRole());
                     m.put("aggregationMethod", col.getAggregationMethod() == null ? "" : col.getAggregationMethod());
                     m.put("sampleValues", col.getSampleValues() == null ? "[]" : col.getSampleValues());
+                    m.put("synonyms", col.getSynonyms() == null ? "[]" : col.getSynonyms());
+                    m.put("valueMeanings", col.getValueMeanings() == null ? "{}" : col.getValueMeanings());
+                    if (col.getDisplayUnit() != null && !col.getDisplayUnit().isBlank()) {
+                        m.put("displayUnit", col.getDisplayUnit());
+                    }
+                    if (col.getScaleToCanonical() != null) {
+                        m.put("scaleToCanonical", col.getScaleToCanonical());
+                    }
+                    if (col.getGrainLabel() != null && !col.getGrainLabel().isBlank()) {
+                        m.put("grainLabel", col.getGrainLabel());
+                    }
                     if (col.getConfidence() != null) {
                         m.put("confidence", col.getConfidence());
                     }
                     return m;
                 })
                 .toList();
-        return Map.of(
-                "tableName", table.getTableName(),
-                "tableSchema", table.getTableSchema(),
-                "description", table.getDescription() == null ? "" : table.getDescription(),
-                "rowCount", table.getRowCount() == null ? 0L : table.getRowCount(),
-                "columnCount", table.getColumns().size(),
-                "columns", columns
-        );
+        Map<String, Object> tableMap = new java.util.LinkedHashMap<>();
+        tableMap.put("tableName", table.getTableName());
+        tableMap.put("tableSchema", table.getTableSchema());
+        tableMap.put("description", table.getDescription() == null ? "" : table.getDescription());
+        tableMap.put("rowCount", table.getRowCount() == null ? 0L : table.getRowCount());
+        tableMap.put("columnCount", table.getColumns().size());
+        if (table.getTableRole() != null && !table.getTableRole().isBlank()) {
+            tableMap.put("tableRole", table.getTableRole());
+        }
+        tableMap.put("columns", columns);
+        return tableMap;
     }
 }

@@ -1,6 +1,8 @@
 package com.example.BACKEND.catalogue.agent;
 
 import com.example.BACKEND.catalogue.agent.executive.ColumnDiscoveryPlanner;
+import com.example.BACKEND.catalogue.agent.executive.MetricEvidenceAnnotator;
+import com.example.BACKEND.catalogue.agent.executive.MetricSemantics;
 import com.example.BACKEND.catalogue.agent.scale.AgentSqlHelper;
 import com.example.BACKEND.catalogue.agent.scale.ScaleAwareQueryExecutor;
 import org.springframework.stereotype.Service;
@@ -78,10 +80,22 @@ public class RevenueModelAgent {
         String revRef = AgentSqlHelper.qualify(revenue, ctx.provider());
         String from = AgentSqlHelper.fromWithPredicates(ctx, revRef + " IS NOT NULL");
         String sql = String.format(
-                "SELECT SUM(%s) AS total_revenue, AVG(%s) AS avg_revenue, COUNT(*) AS trip_count FROM %s",
+                "SELECT SUM(%s) AS total_revenue, AVG(%s) AS avg_revenue, COUNT(*) AS row_count FROM %s",
                 revRef, revRef, from);
 
-        return run(ctx, "REVENUE: total summary " + revenue, sql, out);
+        String label = "REVENUE: total summary " + revenue;
+        List<Map<String, Object>> rows = queryExecutor.execute(sql, label, ctx);
+        if (rows.isEmpty()) return 1;
+        MetricSemantics sem = MetricEvidenceAnnotator.semantics(ctx, revenue);
+        for (Map<String, Object> row : rows) {
+            // Compat: older lens code looked for trip_count
+            if (row.containsKey("row_count") && !row.containsKey("trip_count")) {
+                row.put("trip_count", row.get("row_count"));
+            }
+            MetricEvidenceAnnotator.putSemantics(row, sem, revenue);
+        }
+        out.add(new CollectedData(label, sql, rows));
+        return 1;
     }
 
     /** iv) Revenue trends — monthly series */
@@ -126,6 +140,7 @@ public class RevenueModelAgent {
         summary.put("prior_revenue", prior);
         summary.put("delta_pct", Math.round(deltaPct * 10.0) / 10.0);
         summary.put("direction", deltaPct > 1 ? "UP" : deltaPct < -1 ? "DOWN" : "FLAT");
+        MetricEvidenceAnnotator.putSemantics(summary, MetricEvidenceAnnotator.semantics(ctx, revenue), revenue);
 
         out.add(new CollectedData("REVENUE: period-over-period " + revenue, sql, List.of(summary)));
         return 1;
@@ -143,7 +158,16 @@ public class RevenueModelAgent {
                         + "FROM %s GROUP BY 1 ORDER BY segment_revenue DESC LIMIT %d",
                 dimRef, revRef, revRef, from, TOP_N);
 
-        return run(ctx, "REVENUE: sources by " + dim + " " + revenue, sql, out);
+        String label = "REVENUE: sources by " + dim + " " + revenue;
+        List<Map<String, Object>> rows = queryExecutor.execute(sql, label, ctx);
+        if (rows.isEmpty()) return 1;
+
+        MetricSemantics sem = MetricEvidenceAnnotator.semantics(ctx, revenue);
+        double grand = MetricEvidenceAnnotator.fetchGrandTotal(
+                queryExecutor, ctx, revenue, "REVENUE: grand total " + revenue);
+        MetricEvidenceAnnotator.annotateSegmentRows(rows, "segment_revenue", grand, sem, revenue);
+        out.add(new CollectedData(label, sql, rows));
+        return 1;
     }
 
     /** ii) Weak revenue areas — bottom segments */
@@ -158,7 +182,15 @@ public class RevenueModelAgent {
                         + "ORDER BY segment_revenue ASC LIMIT %d",
                 dimRef, revRef, from, WEAK_N);
 
-        return run(ctx, "REVENUE: weak areas by " + dim + " " + revenue, sql, out);
+        String label = "REVENUE: weak areas by " + dim + " " + revenue;
+        List<Map<String, Object>> rows = queryExecutor.execute(sql, label, ctx);
+        if (rows.isEmpty()) return 1;
+        MetricSemantics sem = MetricEvidenceAnnotator.semantics(ctx, revenue);
+        double grand = MetricEvidenceAnnotator.fetchGrandTotal(
+                queryExecutor, ctx, revenue, "REVENUE: grand total weak " + revenue);
+        MetricEvidenceAnnotator.annotateSegmentRows(rows, "segment_revenue", grand, sem, revenue);
+        out.add(new CollectedData(label, sql, rows));
+        return 1;
     }
 
     /** v/vi) Factor contribution — share of total revenue by segment */
@@ -176,14 +208,21 @@ public class RevenueModelAgent {
                 sql, "REVENUE: factor contribution " + dim, ctx);
         if (rows.isEmpty()) return 1;
 
-        double total = rows.stream().mapToDouble(r -> toDouble(r.get("factor_revenue"))).sum();
-        if (total <= 0) return 1;
+        MetricSemantics sem = MetricEvidenceAnnotator.semantics(ctx, revenue);
+        double grand = MetricEvidenceAnnotator.fetchGrandTotal(
+                queryExecutor, ctx, revenue, "REVENUE: grand total factor " + revenue);
+        if (grand <= 0) return 1;
 
         List<Map<String, Object>> enriched = new ArrayList<>();
         for (Map<String, Object> r : rows) {
             Map<String, Object> row = new LinkedHashMap<>(r);
-            double share = toDouble(r.get("factor_revenue")) / total * 100.0;
+            double seg = toDouble(r.get("factor_revenue"));
+            double share = (seg / grand) * 100.0;
             row.put("share_pct", Math.round(share * 10.0) / 10.0);
+            row.put(MetricEvidenceAnnotator.SHARE_OF_TOTAL, Math.round(share * 10.0) / 10.0);
+            row.put(MetricEvidenceAnnotator.GRAND_TOTAL, grand);
+            row.put(MetricEvidenceAnnotator.SEGMENT_COUNT, rows.size());
+            MetricEvidenceAnnotator.putSemantics(row, sem, revenue);
             enriched.add(row);
         }
 
@@ -194,7 +233,11 @@ public class RevenueModelAgent {
         meta.put("strongest_share_pct", enriched.get(0).get("share_pct"));
         meta.put("weakest_factor", enriched.get(enriched.size() - 1).get("factor"));
         meta.put("weakest_share_pct", enriched.get(enriched.size() - 1).get("share_pct"));
-        meta.put("total_revenue", total);
+        meta.put("total_revenue", grand);
+        meta.put(MetricEvidenceAnnotator.GRAND_TOTAL, grand);
+        meta.put(MetricEvidenceAnnotator.SEGMENT_COUNT, enriched.size());
+        meta.put(MetricEvidenceAnnotator.SHARE_OF_TOTAL, enriched.get(0).get("share_pct"));
+        MetricEvidenceAnnotator.putSemantics(meta, sem, revenue);
 
         List<Map<String, Object>> payload = new ArrayList<>();
         payload.add(meta);

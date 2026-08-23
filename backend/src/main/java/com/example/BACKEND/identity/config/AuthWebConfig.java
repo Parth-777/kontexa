@@ -9,6 +9,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
@@ -29,7 +30,7 @@ public class AuthWebConfig implements WebMvcConfigurer {
     }
 
     @RestControllerAdvice
-    static class AuthExceptionHandler {
+    public static class AuthExceptionHandler {
         @ExceptionHandler(UnauthorizedException.class)
         public ResponseEntity<Map<String, String>> unauthorized(UnauthorizedException ex) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", ex.getMessage()));
@@ -43,6 +44,14 @@ public class AuthWebConfig implements WebMvcConfigurer {
         @ExceptionHandler(ForbiddenException.class)
         public ResponseEntity<Map<String, String>> forbidden(ForbiddenException ex) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", ex.getMessage()));
+        }
+
+        @ExceptionHandler(ResponseStatusException.class)
+        public ResponseEntity<Map<String, String>> responseStatus(ResponseStatusException ex) {
+            String reason = ex.getReason() != null && !ex.getReason().isBlank()
+                    ? ex.getReason()
+                    : (ex.getMessage() != null ? ex.getMessage() : ex.getStatusCode().toString());
+            return ResponseEntity.status(ex.getStatusCode()).body(Map.of("error", reason));
         }
     }
 }

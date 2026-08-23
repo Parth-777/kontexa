@@ -93,8 +93,16 @@ public class CatalogueSemanticEnricher {
                 4. dateGranularity — ONLY for date/time columns:
                    daily | weekly | monthly | event | N/A
                 
+                5. OPTIONAL machine-readable metric semantics (only when you are confident):
+                   displayUnit — currency | percent | count | number | raw
+                   scaleToCanonical — multiply raw warehouse value by this to get canonical units
+                     (e.g. if stored as micros of currency, use 1e-6; if already canonical, use 1)
+                   grainLabel — conservative entity name for COUNT language (sessions, rows, records)
+                   Omit these fields when uncertain. Never invent scale.
+                
                 Return ONLY valid JSON: {"columns":[...]}
-                Each element: columnName, aggregationMethod, businessMeaning, comparisonPeriod, dateGranularity.
+                Each element: columnName, aggregationMethod, businessMeaning, comparisonPeriod,
+                dateGranularity, and optional displayUnit, scaleToCanonical, grainLabel.
                 """;
     }
 
@@ -210,6 +218,8 @@ public class CatalogueSemanticEnricher {
                     filledMeaning++;
                 }
 
+                applyMetricSemantics(col, item);
+
                 col.setEnriched(true);
             }
 
@@ -250,6 +260,28 @@ public class CatalogueSemanticEnricher {
 
     private boolean notBlank(String s) {
         return s != null && !s.isBlank();
+    }
+
+    private void applyMetricSemantics(CatalogueColumnEntity col, JsonNode item) {
+        String displayUnit = item.path("displayUnit").asText("").trim();
+        if (!displayUnit.isBlank()) {
+            String u = validated(displayUnit, "currency", "percent", "count", "number", "raw", "usd", "money");
+            if (!u.isBlank()) col.setDisplayUnit(u.toLowerCase());
+        }
+        if (item.has("scaleToCanonical") && !item.path("scaleToCanonical").isNull()) {
+            try {
+                double scale = item.path("scaleToCanonical").asDouble();
+                if (!Double.isNaN(scale) && !Double.isInfinite(scale) && scale != 0.0) {
+                    col.setScaleToCanonical(scale);
+                }
+            } catch (Exception ignored) {
+                // leave unset
+            }
+        }
+        String grain = item.path("grainLabel").asText("").trim();
+        if (!grain.isBlank() && grain.length() <= 40) {
+            col.setGrainLabel(grain);
+        }
     }
 
     private String truncate(String s, int max) {

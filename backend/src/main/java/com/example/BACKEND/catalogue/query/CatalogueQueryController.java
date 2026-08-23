@@ -1,5 +1,6 @@
 package com.example.BACKEND.catalogue.query;
 
+import com.example.BACKEND.identity.auth.AuthorizationService;
 import com.example.BACKEND.tenant.TenantContextResolver;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -19,13 +20,16 @@ public class CatalogueQueryController {
 
     private final ChatOrchestratorService chatOrchestrator;
     private final TenantContextResolver tenantContextResolver;
+    private final AuthorizationService authorization;
 
     public CatalogueQueryController(
             ChatOrchestratorService chatOrchestrator,
-            TenantContextResolver tenantContextResolver
+            TenantContextResolver tenantContextResolver,
+            AuthorizationService authorization
     ) {
         this.chatOrchestrator = chatOrchestrator;
         this.tenantContextResolver = tenantContextResolver;
+        this.authorization = authorization;
     }
 
     @PostMapping("/ask")
@@ -33,6 +37,7 @@ public class CatalogueQueryController {
             @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
             @RequestBody Map<String, Object> body
     ) {
+        authorization.requireCanQuery();
         String question = body.get("question") == null
                 ? null : String.valueOf(body.get("question")).trim();
         if (question == null || question.isBlank()) {

@@ -3,6 +3,7 @@ import './BasicForm.css';
 import { useEffect } from "react";
 import mixpanel from "../mixpanel";
 import amplitude from "../amplitude";
+import { getAuthHeaders } from '../api/session';
 
 
 
@@ -54,9 +55,7 @@ amplitude.track("Submit Button Clicked", {
   try {
     const response = await fetch("http://localhost:5000/api/forms/submit", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: getAuthHeaders(),
       body: JSON.stringify(formData),
     });
 

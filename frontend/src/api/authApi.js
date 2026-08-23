@@ -1,4 +1,4 @@
-import { getAuthHeaders } from './session';
+import { getAuthHeaders, readJsonOrThrow } from './session';
 
 const BASE_URL = 'http://localhost:5000';
 
@@ -61,9 +61,7 @@ export async function inviteWorkspaceMember({ email, role }) {
     headers: getAuthHeaders(),
     body: JSON.stringify({ email, role }),
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Failed to send invite');
-  return payload;
+  return readJsonOrThrow(response, 'Failed to send invite');
 }
 
 export async function validateInviteToken(token) {
@@ -77,9 +75,7 @@ export async function fetchWorkspaceMembers() {
   const response = await fetch(`${BASE_URL}/api/workspace/members`, {
     headers: getAuthHeaders(),
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Failed to load team members');
-  return payload;
+  return readJsonOrThrow(response, 'Failed to load team members');
 }
 
 export async function resendWorkspaceInvite(inviteId) {
@@ -87,9 +83,7 @@ export async function resendWorkspaceInvite(inviteId) {
     method: 'POST',
     headers: getAuthHeaders(),
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Failed to resend invite');
-  return payload;
+  return readJsonOrThrow(response, 'Failed to resend invite');
 }
 
 export async function revokeWorkspaceInvite(inviteId) {
@@ -97,9 +91,7 @@ export async function revokeWorkspaceInvite(inviteId) {
     method: 'POST',
     headers: getAuthHeaders(),
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Failed to revoke invite');
-  return payload;
+  return readJsonOrThrow(response, 'Failed to revoke invite');
 }
 
 export async function updateWorkspaceMemberRole({ identityId, role }) {
@@ -108,9 +100,7 @@ export async function updateWorkspaceMemberRole({ identityId, role }) {
     headers: getAuthHeaders(),
     body: JSON.stringify({ role }),
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Failed to update role');
-  return payload;
+  return readJsonOrThrow(response, 'Failed to update role');
 }
 
 export async function updateWorkspaceMemberStatus({ identityId, active }) {
@@ -119,9 +109,7 @@ export async function updateWorkspaceMemberStatus({ identityId, active }) {
     headers: getAuthHeaders(),
     body: JSON.stringify({ active }),
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Failed to update status');
-  return payload;
+  return readJsonOrThrow(response, 'Failed to update status');
 }
 
 export async function acceptInvite({ token, password, displayName }) {
@@ -182,80 +170,149 @@ export async function userLogin(userId, password) {
 }
 
 export async function fetchTenantUsers(tenantId) {
-  const response = await fetch(`${BASE_URL}/api/tenant/users?tenantId=${encodeURIComponent(tenantId)}`);
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Failed to load users');
-  return payload;
+  const response = await fetch(
+    `${BASE_URL}/api/tenant/users?tenantId=${encodeURIComponent(tenantId)}`,
+    { headers: getAuthHeaders() }
+  );
+  return readJsonOrThrow(response, 'Failed to load users');
 }
 
 export async function updateTenantUserRole({ tenantId, userId, position }) {
   const response = await fetch(`${BASE_URL}/api/tenant/users/${encodeURIComponent(userId)}/role`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify({ tenantId, position }),
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Failed to update role');
-  return payload;
+  return readJsonOrThrow(response, 'Failed to update role');
 }
 
 export async function updateTenantUserStatus({ tenantId, userId, active }) {
   const response = await fetch(`${BASE_URL}/api/tenant/users/${encodeURIComponent(userId)}/status`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify({ tenantId, active }),
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Failed to update status');
-  return payload;
+  return readJsonOrThrow(response, 'Failed to update status');
 }
 
 export async function deleteTenantUser({ tenantId, userId }) {
   const response = await fetch(
     `${BASE_URL}/api/tenant/users/${encodeURIComponent(userId)}?tenantId=${encodeURIComponent(tenantId)}`,
-    { method: 'DELETE' }
+    { method: 'DELETE', headers: getAuthHeaders() }
   );
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Failed to delete user');
-  return payload;
+  return readJsonOrThrow(response, 'Failed to delete user');
 }
 
 export async function testTenantBigQueryConnection({ projectId, serviceAccountJson, location, dataset }) {
   const response = await fetch(`${BASE_URL}/api/auth/tenant/bigquery/test-connection`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify({ projectId, serviceAccountJson, location, dataset }),
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Failed to test BigQuery connection');
-  return payload;
+  return readJsonOrThrow(response, 'Failed to test BigQuery connection');
 }
 
 export async function connectTenantBigQuery({ tenantId, projectId, serviceAccountJson, location, dataset }) {
   const response = await fetch(`${BASE_URL}/api/auth/tenant/bigquery/connect`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify({ tenantId, projectId, serviceAccountJson, location, dataset }),
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Failed to connect BigQuery');
-  return payload;
+  return readJsonOrThrow(response, 'Failed to connect BigQuery');
 }
 
 export async function fetchTenantBigQueryConfig(tenantId) {
   const response = await fetch(
-    `${BASE_URL}/api/auth/tenant/bigquery/config?tenantId=${encodeURIComponent(tenantId)}`
+    `${BASE_URL}/api/auth/tenant/bigquery/config?tenantId=${encodeURIComponent(tenantId)}`,
+    { headers: getAuthHeaders() }
   );
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Failed to load BigQuery config');
-  return payload;
+  return readJsonOrThrow(response, 'Failed to load BigQuery config');
 }
 
 export async function fetchTenantBigQueryTables(tenantId) {
   const response = await fetch(
-    `${BASE_URL}/api/auth/tenant/bigquery/tables?tenantId=${encodeURIComponent(tenantId)}`
+    `${BASE_URL}/api/auth/tenant/bigquery/tables?tenantId=${encodeURIComponent(tenantId)}`,
+    { headers: getAuthHeaders() }
   );
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Failed to load BigQuery tables');
-  return payload;
+  return readJsonOrThrow(response, 'Failed to load BigQuery tables');
+}
+
+export async function testTenantSnowflakeConnection({
+  account, warehouse, database, schema, username, password,
+}) {
+  const response = await fetch(`${BASE_URL}/api/auth/tenant/snowflake/test-connection`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ account, warehouse, database, schema, username, password }),
+  });
+  return readJsonOrThrow(response, 'Failed to test Snowflake connection');
+}
+
+export async function connectTenantSnowflake({
+  tenantId, account, warehouse, database, schema, username, password,
+}) {
+  const response = await fetch(`${BASE_URL}/api/auth/tenant/snowflake/connect`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({
+      tenantId, account, warehouse, database, schema, username, password,
+    }),
+  });
+  return readJsonOrThrow(response, 'Failed to connect Snowflake');
+}
+
+export async function fetchTenantSnowflakeConfig(tenantId) {
+  const response = await fetch(
+    `${BASE_URL}/api/auth/tenant/snowflake/config?tenantId=${encodeURIComponent(tenantId)}`,
+    { headers: getAuthHeaders() }
+  );
+  return readJsonOrThrow(response, 'Failed to load Snowflake config');
+}
+
+export async function fetchTenantSnowflakeTables(tenantId) {
+  const response = await fetch(
+    `${BASE_URL}/api/auth/tenant/snowflake/tables?tenantId=${encodeURIComponent(tenantId)}`,
+    { headers: getAuthHeaders() }
+  );
+  return readJsonOrThrow(response, 'Failed to load Snowflake tables');
+}
+
+export async function testTenantPostgresConnection({
+  host, port, database, schema, username, password, ssl,
+}) {
+  const response = await fetch(`${BASE_URL}/api/auth/tenant/postgres/test-connection`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ host, port, database, schema, username, password, ssl }),
+  });
+  return readJsonOrThrow(response, 'Failed to test PostgreSQL connection');
+}
+
+export async function connectTenantPostgres({
+  tenantId, host, port, database, schema, username, password, ssl,
+}) {
+  const response = await fetch(`${BASE_URL}/api/auth/tenant/postgres/connect`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({
+      tenantId, host, port, database, schema, username, password, ssl,
+    }),
+  });
+  return readJsonOrThrow(response, 'Failed to connect PostgreSQL');
+}
+
+export async function fetchTenantPostgresConfig(tenantId) {
+  const response = await fetch(
+    `${BASE_URL}/api/auth/tenant/postgres/config?tenantId=${encodeURIComponent(tenantId)}`,
+    { headers: getAuthHeaders() }
+  );
+  return readJsonOrThrow(response, 'Failed to load PostgreSQL config');
+}
+
+export async function fetchTenantPostgresTables(tenantId) {
+  const response = await fetch(
+    `${BASE_URL}/api/auth/tenant/postgres/tables?tenantId=${encodeURIComponent(tenantId)}`,
+    { headers: getAuthHeaders() }
+  );
+  return readJsonOrThrow(response, 'Failed to load PostgreSQL tables');
 }

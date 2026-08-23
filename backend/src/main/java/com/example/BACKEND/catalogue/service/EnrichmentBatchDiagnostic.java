@@ -27,7 +27,7 @@ public class EnrichmentBatchDiagnostic {
     public String parseStopLocation;
     public Integer columnsArraySize;
     public int mappedCount;
-    public String status; // SUCCESS | RETRY | FAILED_LENGTH | FAILED_PARSE | FAILED_HTTP | SPLIT
+    public String status; // SUCCESS | RETRY | FAILED_LENGTH | FAILED_PARSE | FAILED_MAPPING | FAILED_HTTP | SPLIT
     public String errorMessage;
 
     public Map<String, Object> toMap() {

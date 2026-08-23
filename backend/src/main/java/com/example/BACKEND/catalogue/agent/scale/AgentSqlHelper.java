@@ -1,9 +1,10 @@
 package com.example.BACKEND.catalogue.agent.scale;
 
 import com.example.BACKEND.catalogue.agent.TableContext;
+import com.example.BACKEND.catalogue.schema.SqlFieldReferenceEmitter;
 
 /**
- * Shared SQL fragments for scale-aware agents.
+ * Shared SQL fragments for scale-aware Insights agents.
  */
 public final class AgentSqlHelper {
 
@@ -13,8 +14,7 @@ public final class AgentSqlHelper {
         if (ctx.window() == null || !ctx.window().active() || ctx.window().dateColumn() == null) {
             return "";
         }
-        boolean isBQ = "bigquery".equalsIgnoreCase(ctx.provider());
-        String dateRef = isBQ ? "`" + ctx.window().dateColumn() + "`" : ctx.window().dateColumn();
+        String dateRef = qualify(ctx.window().dateColumn(), ctx.provider());
         return ctx.window().whereClause(dateRef, ctx.provider());
     }
 
@@ -25,8 +25,30 @@ public final class AgentSqlHelper {
         return clause.replaceFirst(" (?i)WHERE ", " AND ");
     }
 
+    /**
+     * Qualify a catalogue leaf path for the warehouse dialect.
+     * Nested paths must be quoted per segment ({@code `totals`.`visits`}),
+     * never as a single identifier ({@code `totals.visits`}).
+     */
     public static String qualify(String col, String provider) {
-        return "bigquery".equalsIgnoreCase(provider) ? "`" + col + "`" : col;
+        if (col == null || col.isBlank()) return col;
+        if ("bigquery".equalsIgnoreCase(provider)) {
+            return SqlFieldReferenceEmitter.emitQuotedReference(col);
+        }
+        if ("snowflake".equalsIgnoreCase(provider)) {
+            return quoteSegments(col, "\"");
+        }
+        return col;
+    }
+
+    private static String quoteSegments(String path, String quote) {
+        String[] parts = path.trim().split("\\.");
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < parts.length; i++) {
+            if (i > 0) sb.append('.');
+            sb.append(quote).append(parts[i].trim()).append(quote);
+        }
+        return sb.toString();
     }
 
     public static String qualifiedTableRef(TableContext ctx) {
@@ -49,17 +71,28 @@ public final class AgentSqlHelper {
         return "`" + tableRef.trim() + "`";
     }
 
-    /** Normalizes a date/timestamp column to DATE (handles STRING columns in BigQuery). */
+    /**
+     * Normalizes a temporal column to DATE across common warehouse encodings:
+     * DATE/TIMESTAMP types, ISO strings, compact YYYYMMDD strings, and epoch INT64.
+     */
     public static String asDateExpr(String dateColumnRef, String provider) {
         if ("bigquery".equalsIgnoreCase(provider)) {
+            // Avoid SAFE_CAST(x AS DATE) — BigQuery dry-run rejects INT64→DATE even via SAFE_CAST.
             return "DATE(COALESCE("
-                    + "SAFE_CAST(" + dateColumnRef + " AS DATE), "
-                    + "DATE(SAFE_CAST(" + dateColumnRef + " AS TIMESTAMP)), "
-                    + "SAFE.PARSE_DATE('%Y-%m-%d', SUBSTR(TRIM(CAST(" + dateColumnRef + " AS STRING)), 1, 10))"
+                    + "SAFE_CAST(SAFE_CAST(" + dateColumnRef + " AS TIMESTAMP) AS DATE), "
+                    + "SAFE.PARSE_DATE('%Y-%m-%d', SUBSTR(TRIM(CAST(" + dateColumnRef + " AS STRING)), 1, 10)), "
+                    + "SAFE.PARSE_DATE('%Y%m%d', SUBSTR(REGEXP_REPLACE(CAST("
+                    + dateColumnRef + " AS STRING), r'[^0-9]', ''), 1, 8)), "
+                    + "DATE(TIMESTAMP_SECONDS(SAFE_CAST(" + dateColumnRef + " AS INT64))), "
+                    + "DATE(TIMESTAMP_MILLIS(SAFE_CAST(" + dateColumnRef + " AS INT64)))"
                     + "))";
         }
         if ("snowflake".equalsIgnoreCase(provider)) {
-            return "TRY_CAST(" + dateColumnRef + " AS DATE)";
+            return "COALESCE("
+                    + "TRY_TO_DATE(TO_VARCHAR(" + dateColumnRef + ")), "
+                    + "TRY_TO_DATE(TO_VARCHAR(" + dateColumnRef + "), 'YYYYMMDD'), "
+                    + "DATE(TO_TIMESTAMP(" + dateColumnRef + "))"
+                    + ")";
         }
         return "CAST(" + dateColumnRef + " AS DATE)";
     }
@@ -95,8 +128,8 @@ public final class AgentSqlHelper {
         String tableRef = qualifiedTableRef(ctx);
         return String.format(
                 "SELECT MIN(d) AS window_start, MAX(d) AS window_end FROM ("
-                        + "SELECT %s AS d FROM %s GROUP BY d ORDER BY d DESC LIMIT %d)",
-                dayExpr, tableRef, recentDateCount);
+                        + "SELECT %s AS d FROM %s WHERE %s IS NOT NULL GROUP BY d ORDER BY d DESC LIMIT %d)",
+                dayExpr, tableRef, dayExpr, recentDateCount);
     }
 
     /** FROM table + date window + optional AND predicates (avoids duplicate WHERE). */

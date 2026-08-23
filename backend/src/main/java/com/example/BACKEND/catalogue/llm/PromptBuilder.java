@@ -111,7 +111,11 @@ public class PromptBuilder {
                 - Do NOT emit columns that were not listed in the user prompt.
                 - Poor column names: rely on sample values and neighboring columns; lower confidence.
                 - Return ONLY valid JSON. No markdown fences. No prose outside JSON.
-                - Use exact field names specified in the user prompt schema.
+                - Use exact camelCase field names specified in the user prompt schema
+                  (columnName, businessMeaning, aggregationMethod, businessProfile).
+                  Do not rename them to snake_case.
+                - columnName MUST match a listed physical column name.
+                - businessProfile is the table-level description of THIS table.
                 - Your JSON MUST be complete and closed (all braces/brackets). Never truncate.
                 """;
     }
@@ -162,7 +166,7 @@ public class PromptBuilder {
         if (includeCatalogueLevel) {
             sb.append("""
                     {
-                      "businessProfile": "string — what this table represents in business terms",
+                      "businessProfile": "string — table-level description: what THIS table represents in business terms",
                       "entities": [
                         { "name": "string", "description": "string", "grain": "string" }
                       ],
@@ -176,7 +180,10 @@ public class PromptBuilder {
                           "valueMeanings": {},
                           "role": "dimension|metric|filter|timestamp|identifier|freetext|ignore",
                           "aggregationMethod": "SUM|COUNT|COUNT_DISTINCT|AVG|MIN|MAX|NONE",
-                          "confidence": 0.0
+                          "confidence": 0.0,
+                          "displayUnit": "optional: currency|percent|count|number|raw",
+                          "scaleToCanonical": "optional number",
+                          "grainLabel": "optional short entity label"
                         }
                       ]
                     }
@@ -193,7 +200,10 @@ public class PromptBuilder {
                           "valueMeanings": {},
                           "role": "dimension|metric|filter|timestamp|identifier|freetext|ignore",
                           "aggregationMethod": "SUM|COUNT|COUNT_DISTINCT|AVG|MIN|MAX|NONE",
-                          "confidence": 0.0
+                          "confidence": 0.0,
+                          "displayUnit": "optional: currency|percent|count|number|raw",
+                          "scaleToCanonical": "optional number",
+                          "grainLabel": "optional short entity label"
                         }
                       ]
                     }

@@ -1,5 +1,7 @@
 package com.example.BACKEND.catalogue.schema;
 
+import com.example.BACKEND.catalogue.decision.transforms.BigQueryDialect;
+import com.example.BACKEND.catalogue.decision.transforms.SnowflakeDialect;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -24,6 +26,16 @@ class SqlFieldReferenceEmitterTest {
     void emitsQuotedNestedReference() {
         assertEquals("`trafficSource`.`source`",
                 SqlFieldReferenceEmitter.emitQuotedReference("trafficSource.source"));
+    }
+
+    @Test
+    void emitsDialectQuotedReferences() {
+        assertEquals("`trafficSource`.`source`",
+                SqlFieldReferenceEmitter.emitQuotedReference(
+                        "trafficSource.source", new BigQueryDialect()));
+        assertEquals("\"trafficSource\".\"source\"",
+                SqlFieldReferenceEmitter.emitQuotedReference(
+                        "trafficSource.source", new SnowflakeDialect()));
     }
 
     @Test

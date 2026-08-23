@@ -1,5 +1,6 @@
 package com.example.BACKEND.catalogue.agent;
 
+import com.example.BACKEND.catalogue.schema.NestedSchemaFieldGraph;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.stereotype.Service;
 
@@ -32,7 +33,7 @@ public class KpiDetectorService {
 
     private static final Set<String> DATE_KEYWORDS = Set.of(
             "date", "time", "day", "week", "month", "year",
-            "created", "updated", "modified", "timestamp", "at", "on",
+            "created", "updated", "modified", "timestamp",
             "start", "end", "period", "recorded", "logged", "occurred"
     );
 
@@ -70,8 +71,9 @@ public class KpiDetectorService {
         String tableName   = tableNode.path("tableName").asText("");
         String tableSchema = tableNode.path("tableSchema").asText("public");
 
-        String       dateCol    = null;
-        List<String> stringCols = new ArrayList<>();
+        String       dateCol     = null;
+        int          dateScore   = -1;
+        List<String> stringCols  = new ArrayList<>();
         List<String> numericCols = new ArrayList<>();
 
         for (JsonNode col : tableNode.path("columns")) {
@@ -80,19 +82,67 @@ public class KpiDetectorService {
             String role     = col.path("role").asText("").toLowerCase();
             String dateGran = col.path("dateGranularity").asText("N/A");
             String aggMethod = col.path("aggregationMethod").asText("NONE");
-            if (name.isBlank()) continue;
+            boolean container = col.path("container").asBoolean(false)
+                    || NestedSchemaFieldGraph.isNestedContainerType(type);
+            if (name.isBlank() || container) continue;
 
-            if (classifyAsDate(name.toLowerCase(), type, role, dateGran)) {
-                if (dateCol == null) dateCol = name;
-            } else if (classifyAsMetric(name.toLowerCase(), type, role, aggMethod)) {
+            int scoredDate = scoreAsDate(name.toLowerCase(), type, role, dateGran);
+            if (scoredDate > 0 && scoredDate > dateScore) {
+                // Demote previous date candidate into string/numeric if applicable
+                if (dateCol != null) {
+                    rehomeNonDate(dateCol, tableNode, stringCols, numericCols);
+                }
+                dateCol = name;
+                dateScore = scoredDate;
+                continue;
+            }
+            if (dateCol != null && name.equalsIgnoreCase(dateCol)) {
+                continue;
+            }
+            if (classifyAsMetric(name.toLowerCase(), type, role, aggMethod)) {
                 numericCols.add(name);
             } else {
-                // Everything else is potentially a categorical/string column
                 stringCols.add(name);
             }
         }
 
         return new ColumnHints(tableName, tableSchema, dateCol, stringCols, numericCols);
+    }
+
+    /** Prefer typed/enriched dates over weak name matches on integers (e.g. epoch seconds). */
+    private int scoreAsDate(String name, String type, String role, String dateGran) {
+        int score = 0;
+        if (dateGran != null && !"N/A".equals(dateGran) && !dateGran.isBlank()) score += 100;
+        if (isDateType(type)) score += 80;
+        if ("date".equals(role) || "time".equals(role) || "timestamp".equals(role)) score += 70;
+        // Prefer canonical calendar fields over epoch-like integers when scores would otherwise tie.
+        if (name.equals("date") || name.endsWith("_date") || name.endsWith(".date")) score += 45;
+        if (isStringType(type)) score += 15;
+        if (isNumericType(type) && (name.contains("date") || name.contains("time")
+                || name.contains("timestamp") || name.endsWith("_at") || name.endsWith("_on"))) {
+            score += 25; // epoch-like — usable after SAFE date coercion
+        } else if (isStringType(type) && DATE_KEYWORDS.stream().anyMatch(name::contains)) {
+            score += 50;
+        } else if (!isNumericType(type) && DATE_KEYWORDS.stream().anyMatch(name::contains)) {
+            score += 30;
+        }
+        return score;
+    }
+
+    private void rehomeNonDate(
+            String colName, JsonNode tableNode, List<String> stringCols, List<String> numericCols) {
+        for (JsonNode col : tableNode.path("columns")) {
+            if (!colName.equalsIgnoreCase(col.path("columnName").asText(""))) continue;
+            String type = col.path("dataType").asText("").toLowerCase();
+            String role = col.path("role").asText("").toLowerCase();
+            String agg = col.path("aggregationMethod").asText("NONE");
+            if (classifyAsMetric(colName.toLowerCase(), type, role, agg)) {
+                if (!numericCols.contains(colName)) numericCols.add(colName);
+            } else if (!stringCols.contains(colName)) {
+                stringCols.add(colName);
+            }
+            return;
+        }
     }
 
     /**

@@ -1,279 +1,668 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import GetAccessModal from '../components/GetAccessModal';
+import HeroCanvas from '../components/homepage/HeroCanvas';
+import ProblemShiftExperience from '../components/homepage/ProblemShiftExperience';
+import InvestigationExperience from '../components/homepage/InvestigationExperience';
+import ProductFindingExperience from '../components/homepage/ProductFindingExperience';
+import FinalExperience from '../components/homepage/FinalExperience';
 
-const OUTCOMES = [
+
+const connectors = [
+  { name: 'Snowflake', mark: '❄' },
+  { name: 'BigQuery', mark: '◈' },
+  { name: 'Redshift', mark: '▮▮' },
+  { name: 'Databricks', mark: '◆' },
+  { name: 'PostgreSQL', mark: '◉' },
+  { name: 'More', mark: '•••' },
+];
+
+const insightItems = [
   {
-    symbol: '◆',
-    title: 'Revenue concentration risk',
-    body: 'Identify which segments, regions, or products drive disproportionate revenue — before it becomes a structural dependency.',
+    tone: 'risk',
+    title: 'Europe is the primary contributor to the revenue decline.',
+    tag: 'Risk',
+    meta: 'Europe · 2h ago',
   },
   {
-    symbol: '⊕',
-    title: 'Performance anomaly detection',
-    body: 'Surface what changed, when it changed, and which dimension drove the deviation — without building a dashboard.',
+    tone: 'risk',
+    title: 'Enterprise segment churn increased in APAC.',
+    tag: 'Risk',
+    meta: 'Churn · 4h ago',
   },
   {
-    symbol: '△',
-    title: 'Growth driver attribution',
-    body: 'Decompose growth or decline into ranked contributors with quantified impact. Know what actually moved the number.',
+    tone: 'opportunity',
+    title: 'Top growing product is driven by enterprise wins.',
+    tag: 'Opportunity',
+    meta: 'Growth · 1d ago',
   },
   {
-    symbol: '◈',
-    title: 'Executive-grade findings',
-    body: 'Structured conclusions with ranked evidence. Contribution breakdowns, efficiency rankings, temporal patterns — ready for decisions.',
+    tone: 'watch',
+    title: 'Support-ticket volume correlates with retention drop.',
+    tag: 'Watch',
+    meta: 'Retention · 2d ago',
   },
 ];
 
-const TRUST_ITEMS = [
-  { symbol: '▤', label: 'Evidence-grounded', sub: 'Every finding is computed, not narrated' },
-  { symbol: '◈', label: 'Multi-warehouse',   sub: 'BigQuery-native, expanding to more' },
-  { symbol: '◉', label: 'Traceable logic',   sub: 'Every conclusion links to its source' },
-  { symbol: '△', label: 'Structured output', sub: 'Ranked findings, not raw summaries' },
-];
+function Arrow() {
+  return (
+    <span className="mk-arrow" aria-hidden="true">
+      →
+    </span>
+  );
+}
 
 function HomePage() {
-  const questions = useMemo(
-    () => [
-      'Which regions are driving margin decline this quarter?',
-      'Why did user retention drop after the Q3 product update?',
-      'Which customer segments show the highest concentration risk?',
-      'What changed before conversion rates declined in Europe?',
-      'Where is revenue growth concentrated across product lines?',
-    ],
-    []
-  );
+  const [accessOpen, setAccessOpen] = useState(false);
+  const [accessSource, setAccessSource] = useState('homepage-hero');
 
-  const [questionIndex, setQuestionIndex] = useState(0);
-  const [typedText,     setTypedText]     = useState('');
-  const [isDeleting,    setIsDeleting]    = useState(false);
-  const [accessOpen,    setAccessOpen]    = useState(false);
-  const [accessSource,  setAccessSource]  = useState('homepage-hero');
-
-  useEffect(() => {
-    const current   = questions[questionIndex];
-    const doneTyping   = !isDeleting && typedText === current;
-    const doneDeleting = isDeleting  && typedText === '';
-    const delay = doneTyping ? 1800 : isDeleting ? 28 : 42;
-
-    const timer = window.setTimeout(() => {
-      if (doneTyping)   { setIsDeleting(true); return; }
-      if (doneDeleting) {
-        setIsDeleting(false);
-        setQuestionIndex((p) => (p + 1) % questions.length);
-        return;
-      }
-      const next = typedText.length + (isDeleting ? -1 : 1);
-      setTypedText(current.slice(0, next));
-    }, delay);
-
-    return () => window.clearTimeout(timer);
-  }, [typedText, isDeleting, questionIndex, questions]);
+  const openAccess = (source) => {
+    setAccessSource(source);
+    setAccessOpen(true);
+  };
 
   return (
     <div className="hp-shell">
-      {/* background atmosphere */}
-      <div className="hp-orb hp-orb--a" />
-      <div className="hp-orb hp-orb--b" />
-      <div className="hp-orb hp-orb--c" />
+      <div className="hp-bg-glow hp-bg-glow--one" />
+      <div className="hp-bg-glow hp-bg-glow--two" />
       <div className="hp-grid" />
 
-      {/* ── Nav ───────────────────────────────────────────────────────── */}
       <nav className="hp-nav">
         <div className="hp-nav-inner">
-          <Link to="/" className="hp-nav-brand">
+          <Link
+            to="/"
+            className="hp-nav-brand"
+            aria-label="Kontexa home"
+          >
             <span className="hp-nav-logo">K</span>
             <span className="hp-nav-wordmark">KONTEXA</span>
           </Link>
+
           <div className="hp-nav-links">
-            <a href="#outcomes">Platform</a>
-            <a href="#trust">Enterprise</a>
-            <Link to="/signin" className="hp-nav-cta">Sign in</Link>
+            <a href="#problem">Problem</a>
+            <a href="#how">How it works</a>
+            <a href="#insights">Insights</a>
+            <a href="#evidence">Evidence</a>
+            <a href="#connectors">Connectors</a>
+
+            <button
+              className="hp-nav-access"
+              onClick={() => openAccess('homepage-nav')}
+            >
+              Request access
+            </button>
+
+            <Link
+              to="/signin"
+              className="hp-nav-signin"
+            >
+              Sign in
+            </Link>
           </div>
         </div>
       </nav>
 
-      {/* ── Hero ──────────────────────────────────────────────────────── */}
-      <section className="hp-hero">
-        <p className="hp-hero-eyebrow">Business Intelligence Made Easy </p>
-        <h1 className="hp-hero-h1">
-          Understand what changed.<br />
-          <span className="hp-hero-h1-accent">Act on what matters.</span>
-        </h1>
-        <p className="hp-hero-sub">
-          Kontexa converts warehouse data into structured analytical intelligence —
-          ranked findings, contribution breakdowns, and executive narratives.
-          
-        </p>
+      <main>
 
-        <div className="hp-query-panel">
-          <div className="hp-query-label">Ask a question</div>
-          <div className="hp-query-box">
-            <span className="hp-query-arrow">›</span>
-            <span className="hp-query-text">{typedText || '\u00A0'}</span>
-            <span className="hp-query-cursor" />
-          </div>
-        </div>
+        {/* =========================================================
+            HERO
+        ========================================================= */}
 
-        <div className="hp-hero-actions">
-          <button
-            type="button"
-            className="hp-btn hp-btn--primary"
-            onClick={() => { setAccessSource('homepage-hero'); setAccessOpen(true); }}
-          >
-            Get access
-          </button>
-          <a href="#preview" className="hp-btn hp-btn--ghost">
-            See an example →
-          </a>
-        </div>
-      </section>
+        <section className="mk-hero">
+          <div className="mk-hero-copy">
+            <p className="mk-eyebrow">
+              Evidence-driven · warehouse-native
+            </p>
 
-      {/* ── Product preview ───────────────────────────────────────────── */}
-      <section id="preview" className="hp-preview-section">
-        <div className="hp-preview-label">What Kontexa actually produces</div>
-        <div className="hp-preview-card">
-          <div className="hp-preview-question">
-            <span className="hp-preview-q-icon">›</span>
-            Which regions are driving margin decline this quarter?
-          </div>
+            <h1>
+              Business Intelligence <span>Made Easy</span>
+            </h1>
 
-          <div className="hp-preview-body">
-            <div className="hp-preview-head-row">
-              <span className="hp-finding-tag">CONTRIBUTION_BREAKDOWN</span>
-              <span className="hp-preview-title">Revenue by Region · Q4 2025</span>
+            <p className="mk-hero-lede">
+              Ask business questions in plain English. Kontexa analyzes your
+              data, explains what changed, and surfaces the insights that
+              matter.
+            </p>
+
+            <div className="mk-hero-actions">
+              <button
+                className="hp-btn hp-btn--primary"
+                onClick={() => openAccess('homepage-hero')}
+              >
+                Request enterprise access
+              </button>
+
+              <a
+                className="hp-btn hp-btn--ghost"
+                href="#how"
+              >
+                See how it works <Arrow />
+              </a>
             </div>
 
-            <div className="hp-segments">
-              <div className="hp-segment">
-                <span className="hp-seg-rank">#1</span>
-                <span className="hp-seg-name">North America</span>
-                <div className="hp-seg-bar-wrap">
-                  <div className="hp-seg-bar" style={{ width: '100%' }} />
-                </div>
-                <span className="hp-seg-val">$4.2M</span>
-                <span className="hp-seg-pct">68%</span>
-                <span className="hp-seg-delta hp-delta--up">▲ +4%</span>
-              </div>
-              <div className="hp-segment hp-segment--flagged">
-                <span className="hp-seg-rank">#2</span>
-                <span className="hp-seg-name">Europe</span>
-                <div className="hp-seg-bar-wrap">
-                  <div className="hp-seg-bar hp-seg-bar--warn" style={{ width: '26%' }} />
-                </div>
-                <span className="hp-seg-val">$1.1M</span>
-                <span className="hp-seg-pct">18%</span>
-                <span className="hp-seg-delta hp-delta--down">▼ −31%</span>
-              </div>
-              <div className="hp-segment">
-                <span className="hp-seg-rank">#3</span>
-                <span className="hp-seg-name">APAC</span>
-                <div className="hp-seg-bar-wrap">
-                  <div className="hp-seg-bar" style={{ width: '15%' }} />
-                </div>
-                <span className="hp-seg-val">$0.6M</span>
-                <span className="hp-seg-pct">10%</span>
-                <span className="hp-seg-delta hp-delta--up">▲ +8%</span>
-              </div>
-              <div className="hp-segment hp-segment--muted">
-                <span className="hp-seg-rank">—</span>
-                <span className="hp-seg-name">Other</span>
-                <div className="hp-seg-bar-wrap">
-                  <div className="hp-seg-bar hp-seg-bar--muted" style={{ width: '6%' }} />
-                </div>
-                <span className="hp-seg-val">$0.2M</span>
-                <span className="hp-seg-pct">4%</span>
-                <span className="hp-seg-delta hp-delta--flat">▼ −5%</span>
-              </div>
-            </div>
+            <div className="mk-hero-trust">
+              <span>
+                <b>✦</b> Works inside Claude
+              </span>
 
-            <div className="hp-preview-divider" />
-            <div className="hp-preview-finding">
-              <span className="hp-finding-label">Finding</span>
-              Europe shows <strong>31% margin compression</strong> QoQ — the primary driver of total decline at 18% revenue share.
-              Top-3 concentration: <strong>96%</strong> · Leader gap: <strong>3.8× median</strong> · Gini: 0.72
+              <span>
+                <b>◇</b> Enterprise-grade security
+              </span>
+
+              <span>
+                <b>▤</b> Your data stays in your warehouse
+              </span>
             </div>
           </div>
-        </div>
-      </section>
 
-      {/* ── Outcomes ──────────────────────────────────────────────────── */}
-      <section id="outcomes" className="hp-outcomes">
-        <div className="hp-section-header">
-          <p className="hp-section-eyebrow">Platform capabilities</p>
-          <h2 className="hp-section-title">Built for operational intelligence</h2>
-          <p className="hp-section-sub">
-            Kontexa moves analysis from reactive to structural — from charts to conclusions.
-          </p>
-        </div>
-        <div className="hp-outcomes-grid">
-          {OUTCOMES.map((o) => (
-            <div key={o.title} className="hp-outcome-card">
-              <span className="hp-outcome-symbol">{o.symbol}</span>
-              <h3 className="hp-outcome-title">{o.title}</h3>
-              <p className="hp-outcome-body">{o.body}</p>
+          <div className="mk-claude-wrap">
+            <div className="mk-claude-label">
+              <span className="mk-claude-dot">✦</span>
+
+              <strong>Kontexa + Claude</strong>
+
+              <span className="mk-live-pill">
+                Integrated inside Claude
+              </span>
+
+              <span className="mk-claude-name">
+                Claude
+              </span>
             </div>
-          ))}
-        </div>
-      </section>
 
-      {/* ── Enterprise trust ──────────────────────────────────────────── */}
-      <section id="trust" className="hp-trust">
-        <div className="hp-trust-inner">
-          <p className="hp-section-eyebrow" style={{ textAlign: 'center' }}>Enterprise-grade</p>
-          <h2 className="hp-trust-title">Built for enterprise analytical workloads</h2>
-          <p className="hp-trust-sub">
-            No hallucinated insights. No generic summaries. Every finding is computed from
-            structured evidence, grounded in your warehouse data.
-          </p>
-          <div className="hp-trust-grid">
-            {TRUST_ITEMS.map((t) => (
-              <div key={t.label} className="hp-trust-item">
-                <span className="hp-trust-symbol">{t.symbol}</span>
+            <div className="mk-claude-frame">
+              <img
+                src="/claude-kontexa-hero.png"
+                alt="Kontexa working inside Claude"
+              />
+
+              <div className="mk-image-caption">
+                Business question → warehouse analysis → evidence-backed answer
+              </div>
+            </div>
+          </div>
+        </section>
+
+
+        {/* =========================================================
+            PROBLEM / LOOP
+        ========================================================= */}
+
+        <section
+          id="problem"
+          className="mk-section mk-problem"
+        >
+          <div className="mk-section-head centered">
+            <p className="mk-eyebrow">
+              The problem
+            </p>
+
+            <h2>
+              The bottleneck isn&apos;t data. <span>It&apos;s the loop.</span>
+            </h2>
+
+            <p>
+              Important questions still move through a manual analytics relay
+              before anyone can make a decision.
+            </p>
+          </div>
+
+          <div className="mk-compare">
+
+            <div className="mk-old-way">
+              <div className="mk-compare-title">
+                <span>THE OLD WAY</span>
+                <em>Days or weeks</em>
+              </div>
+
+              <div className="mk-loop">
+                <div className="mk-loop-node mk-loop-node--top">
+                  Business question
+                </div>
+
+                <div className="mk-loop-node mk-loop-node--right">
+                  Dashboard
+                </div>
+
+                <div className="mk-loop-node mk-loop-node--bottom">
+                  Filter &amp; compare
+                </div>
+
+                <div className="mk-loop-node mk-loop-node--left">
+                  Analyst / ticket
+                </div>
+
+                <div className="mk-loop-center">
+                  ↻
+                  <small>
+                    Investigate
+                    <br />
+                    again
+                  </small>
+                </div>
+
+                <i className="mk-loop-arrow mk-loop-arrow--a">
+                  ↘
+                </i>
+
+                <i className="mk-loop-arrow mk-loop-arrow--b">
+                  ↙
+                </i>
+
+                <i className="mk-loop-arrow mk-loop-arrow--c">
+                  ↖
+                </i>
+
+                <i className="mk-loop-arrow mk-loop-arrow--d">
+                  ↗
+                </i>
+              </div>
+            </div>
+
+            <div className="mk-vs">
+              VS
+            </div>
+
+            <div className="mk-new-way">
+              <div className="mk-compare-title">
+                <span>WITH KONTEXA</span>
+                <em>Minutes, not weeks</em>
+              </div>
+
+              <div className="mk-process">
+                {[
+                  ['01', 'Ask', 'plain English'],
+                  ['02', 'Analyze', 'your warehouse'],
+                  ['03', 'Explain', 'what changed'],
+                  ['04', 'Evidence', 'you can trust'],
+                  ['05', 'Decide', 'with confidence'],
+                ].map(([num, title, sub], i) => (
+                  <div
+                    className="mk-process-item"
+                    key={num}
+                  >
+                    <div className="mk-process-icon">
+                      {num}
+                    </div>
+
+                    <strong>{title}</strong>
+
+                    <span>{sub}</span>
+
+                    {i < 4 && <Arrow />}
+                  </div>
+                ))}
+              </div>
+
+              <div className="mk-win-row">
+                <span>✓ Fewer handoffs</span>
+                <span>✓ Evidence before narrative</span>
+                <span>✓ Confidence + unknowns</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+
+        {/* =========================================================
+            INSIGHTS
+        ========================================================= */}
+
+        <section
+          id="insights"
+          className="mk-section mk-insights"
+        >
+          <div className="mk-section-head split-head">
+            <div>
+              <p className="mk-eyebrow">
+                Insights that matter
+              </p>
+
+              <h2>
+                Surface what matters.
+                <br />
+                <span>Instantly.</span>
+              </h2>
+            </div>
+
+            <p>
+              A living inbox of meaningful changes, risks and opportunities —
+              with the evidence behind every insight.
+            </p>
+          </div>
+
+          <div className="mk-insight-shell">
+
+            <div className="mk-insight-sidebar">
+              <div className="mk-insight-top">
+                <strong>Insights</strong>
+                <span>12 unread</span>
+              </div>
+
+              <div className="mk-insight-tabs">
+                <b>All</b>
+                <span>Unread</span>
+                <span>Critical</span>
+                <span>Risks</span>
+                <span>Opportunities</span>
+              </div>
+
+              <div className="mk-insight-list">
+                {insightItems.map((item, index) => (
+                  <div
+                    className={`mk-insight-item ${
+                      index === 0 ? 'is-selected' : ''
+                    }`}
+                    key={item.title}
+                  >
+                    <i
+                      className={`mk-insight-dot mk-insight-dot--${item.tone}`}
+                    />
+
+                    <div>
+                      <strong>{item.title}</strong>
+
+                      <small>
+                        <b>{item.tag}</b> {item.meta}
+                      </small>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="mk-insight-detail">
+
+              <div className="mk-detail-meta">
+                <span className="mk-risk">
+                  Risk
+                </span>
+
+                <span>
+                  Detected 2 hours ago · Confidence:{' '}
+                  <b>High</b>
+                </span>
+              </div>
+
+              <h3>
+                Europe is the primary contributor to the revenue decline.
+              </h3>
+
+              <p className="mk-detail-summary">
+                Kontexa found an 8.4% revenue decline, with Europe contributing
+                the largest share of the movement.
+              </p>
+
+              <div className="mk-metrics">
                 <div>
-                  <p className="hp-trust-label">{t.label}</p>
-                  <p className="hp-trust-detail">{t.sub}</p>
+                  <strong>↓ 8.4%</strong>
+                  <span>Revenue change</span>
                 </div>
+
+                <div>
+                  <strong>18%</strong>
+                  <span>Revenue share</span>
+                </div>
+
+                <div>
+                  <strong>64%</strong>
+                  <span>Contribution to decline</span>
+                </div>
+              </div>
+
+              <div className="mk-detail-bottom">
+                <div>
+                  <small>SUPPORTING EVIDENCE</small>
+
+                  <p>
+                    fct_revenue · 12,884 rows
+                    <br />
+                    dim_regions · 4,190 rows
+                    <br />
+                    7 queries · 2.4s
+                  </p>
+                </div>
+
+                <button className="mk-small-btn">
+                  Ask Kontexa
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+
+        {/* =========================================================
+            HOW IT WORKS
+        ========================================================= */}
+
+        <section
+          id="how"
+          className="mk-section mk-how"
+        >
+          <div className="mk-section-head centered compact">
+            <p className="mk-eyebrow">
+              How it works
+            </p>
+
+            <h2>
+              From question to <span>proven answer.</span>
+            </h2>
+
+            <p>
+              Kontexa plans the investigation, queries the warehouse, and
+              turns verified evidence into a decision-ready explanation.
+            </p>
+          </div>
+
+          <div className="mk-evidence-flow">
+            {[
+              [
+                '01',
+                'Ask',
+                'Natural-language business question',
+              ],
+              [
+                '02',
+                'Plan',
+                'Competing hypotheses + evidence purpose',
+              ],
+              [
+                '03',
+                'Prove',
+                'Warehouse results validate the claims',
+              ],
+              [
+                '04',
+                'Decide',
+                'Narrative with confidence and unknowns',
+              ],
+            ].map(([num, title, text], index) => (
+              <div
+                className="mk-flow-card"
+                key={num}
+              >
+                <span>{num}</span>
+
+                <strong>{title}</strong>
+
+                <p>{text}</p>
+
+                {index < 3 && <Arrow />}
               </div>
             ))}
           </div>
-        </div>
-      </section>
+        </section>
 
-      {/* ── Final CTA ─────────────────────────────────────────────────── */}
-      <section className="hp-final-cta">
-        <p className="hp-section-eyebrow">Get started</p>
-        <h2 className="hp-final-title">
-          Your data has answers.<br />Kontexa surfaces them.
-        </h2>
-        <p className="hp-final-sub">
-          Connect your warehouse and start asking questions that move decisions forward.
-        </p>
-        <button
-          type="button"
-          className="hp-btn hp-btn--primary hp-btn--lg"
-          onClick={() => { setAccessSource('homepage-cta'); setAccessOpen(true); }}
+
+        {/* =========================================================
+            EVIDENCE / TRUST
+        ========================================================= */}
+
+        <section
+          id="evidence"
+          className="mk-section mk-evidence"
         >
-          Access the platform
-        </button>
-      </section>
+          <div className="mk-evidence-banner">
+            <div>
+              <p className="mk-eyebrow">
+                Built for trust
+              </p>
+
+              <h2>
+                Proven, not plausible.
+              </h2>
+
+              <p>
+                Every answer is grounded in governed business context and
+                warehouse evidence.
+              </p>
+            </div>
+
+            <div className="mk-trust-grid">
+              <span>
+                <b>Governed</b>
+                Approved metrics and definitions
+              </span>
+
+              <span>
+                <b>Warehouse-native</b>
+                Queries run where your data lives
+              </span>
+
+              <span>
+                <b>Evidence-bound</b>
+                Claims backed by results
+              </span>
+
+              <span>
+                <b>Traceable</b>
+                Follow answers to their source
+              </span>
+            </div>
+          </div>
+        </section>
+
+
+        {/* =========================================================
+            CONNECTORS
+        ========================================================= */}
+
+        <section
+          id="connectors"
+          className="mk-section mk-connectors"
+        >
+          <div className="mk-section-head split-head connector-head">
+            <div>
+              <p className="mk-eyebrow">
+                Connect your data
+              </p>
+
+              <h2>
+                Works with the warehouses{' '}
+                <span>you already use.</span>
+              </h2>
+            </div>
+
+            <p>
+              Connect to multiple warehouse environments and keep your data
+              where it already lives.
+            </p>
+          </div>
+
+          <div className="mk-connector-grid">
+            {connectors.map((connector) => (
+              <div
+                className="mk-connector"
+                key={connector.name}
+              >
+                <b>{connector.mark}</b>
+                <span>{connector.name}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+
+        {/* =========================================================
+            CTA
+        ========================================================= */}
+
+        <section className="mk-cta-section">
+          <div className="mk-cta-card">
+            <div>
+              <p className="mk-eyebrow">
+                Business Intelligence Made Easy
+              </p>
+
+              <h2>
+                Your data has answers.
+                <br />
+                <span>Kontexa helps you find them.</span>
+              </h2>
+            </div>
+
+            <div className="mk-cta-actions">
+              <button
+                className="hp-btn hp-btn--primary"
+                onClick={() => openAccess('homepage-cta')}
+              >
+                Request enterprise access
+              </button>
+
+              <a
+                className="hp-btn hp-btn--ghost"
+                href="#how"
+              >
+                See how it works <Arrow />
+              </a>
+            </div>
+          </div>
+        </section>
+      </main>
+
+
+      {/* =========================================================
+          FOOTER
+      ========================================================= */}
+
+      <footer className="hp-footer">
+        <div className="hp-footer-inner">
+
+          <div>
+            <span className="hp-nav-logo hp-nav-logo--sm">
+              K
+            </span>
+
+            <span className="hp-nav-wordmark hp-nav-wordmark--muted">
+              KONTEXA
+            </span>
+
+            <p>
+              Evidence-driven business intelligence for modern teams.
+            </p>
+          </div>
+
+          <div className="hp-footer-links">
+            <a href="#problem">Problem</a>
+            <a href="#how">How it works</a>
+            <a href="#insights">Insights</a>
+            <a href="#evidence">Evidence</a>
+            <a href="#connectors">Connectors</a>
+          </div>
+
+          <span className="hp-footer-copy">
+            © 2026 Kontexa. All rights reserved.
+          </span>
+        </div>
+      </footer>
+
 
       <GetAccessModal
         isOpen={accessOpen}
         onClose={() => setAccessOpen(false)}
         sourcePage={accessSource}
       />
-
-      {/* ── Footer ────────────────────────────────────────────────────── */}
-      <footer className="hp-footer">
-        <div className="hp-footer-inner">
-          <div className="hp-footer-brand">
-            <span className="hp-nav-logo hp-nav-logo--sm">K</span>
-            <span className="hp-nav-wordmark hp-nav-wordmark--muted">KONTEXA</span>
-          </div>
-          <span className="hp-footer-copy">© 2026 Kontexa. All rights reserved.</span>
-        </div>
-      </footer>
     </div>
   );
 }

@@ -2,6 +2,7 @@ package com.example.BACKEND.catalogue.agent.executive;
 
 import com.example.BACKEND.catalogue.agent.AgentDashboardResult;
 import com.example.BACKEND.catalogue.agent.CollectedData;
+import com.example.BACKEND.catalogue.agent.InsightsSynthesisPacketBuilder;
 import com.example.BACKEND.catalogue.llm.OpenAiClient;
 import com.example.BACKEND.catalogue.service.TenantBusinessProfileService;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -29,7 +30,18 @@ public class MeetingReadyInsightPolisher {
             "review drivers",
             "optimize operations",
             "improve margins",
-            "review operational efficiency"
+            "review operational efficiency",
+            "enhance data integration",
+            "upgrade analytics",
+            "improve analytics",
+            "platform capabilities",
+            "monitor performance",
+            "optimize strategy",
+            "data may require",
+            "align cross-functional",
+            "owner-assigned response",
+            "consider optimizing",
+            "next month"
     );
 
     private final OpenAiClient openAiClient;
@@ -61,21 +73,30 @@ public class MeetingReadyInsightPolisher {
 
                     TASK: Rewrite insight cards for a BOARD MEETING slide deck.
                     
+                    HARD RULES (fail closed):
+                    - Use ONLY numbers that already appear in the card highlights or EVIDENCE block.
+                    - Do NOT invent percentages, deltas, trends, or currency amounts.
+                    - Do NOT change "of returned groups" / "of top group" into "of total" unless
+                      evidence contains share_of_total_pct / grand_total proving it.
+                    - Do NOT say revenue "increased/decreased/rose/fell" unless evidence has
+                      period-over-period or multi-period trend rows.
+                    - Do NOT invent causality or recommendations that require numbers not in evidence.
+                    
                     For EACH card:
                     - title: Slide headline (max 14 words). Pattern: [What moved] — [business implication].
                       Do NOT start with "Root cause:". No snake_case. No repetition of the description.
                     - description: Exactly ONE sentence — So What (stakes for P&L, cash, or volume).
-                      Must add NEW insight vs the title (not a paraphrase).
+                      Must add NEW insight vs the title (not a paraphrase). Must not invent numbers.
                     - badge: ALERT (margin/cost deterioration), OPPORTUNITY (revenue/volume upside),
                       RISK (concentration, volatility, sustainability risk). Revenue surge = OPPORTUNITY not RISK.
-                    - reasons: 2 bullets, past tense, each with a number ($, %, barrels, bps).
+                    - reasons: 2 bullets, past tense, each with a number already present in evidence.
                     - strategies: 2 bullets. Format EXACTLY:
                       "Owner — specific lever (what to change) — measurable target — timeframe"
-                      Examples:
-                      "Finance — cap discretionary opex at $X/week — restore margin to 15%+ — this quarter"
-                      "Sales — renegotiate term contracts in top 3 accounts — +8% realized price — 60 days"
+                      If no evidence-backed action exists, return strategies: [].
                     
-                    BANNED in strategies: "implement cost control", "monitor", "investigate", "review efficiency"
+                    BANNED in strategies: "implement cost control", "monitor", "investigate",
+                    "review efficiency", "enhance data", "upgrade analytics", "improve analytics",
+                    "align cross-functional", "next month", "platform capabilities".
                     
                     JSON only:
                     {"cards":[{"index":0,"title":"...","description":"...","badge":"ALERT","reasons":["...","..."],"strategies":["...","..."]}]}
@@ -181,14 +202,14 @@ public class MeetingReadyInsightPolisher {
 
     private static String buildSoWhatFromTitle(String title) {
         String t = stripRootCausePrefix(title);
-        if (t.toLowerCase(Locale.ROOT).contains("margin")) {
-            return "Margin pressure directly threatens full-year profitability unless cost and price levers are reset.";
+        // Keep factual — do not invent consulting advice when description collapses.
+        if (HAS_DIGIT.matcher(t).find()) {
+            return t;
         }
-        if (t.toLowerCase(Locale.ROOT).contains("revenue")) {
-            return "Revenue volatility affects cash planning — leadership should validate sustainability before resetting targets.";
-        }
-        return "This shift is material to the operating plan and requires an owner-assigned response this quarter.";
+        return "Evidence-backed movement detected; see metrics and reasons for detail.";
     }
+
+    private static final java.util.regex.Pattern HAS_DIGIT = java.util.regex.Pattern.compile("\\d");
 
     static boolean isNearDuplicate(String title, String description) {
         String a = normalize(title);
@@ -244,7 +265,12 @@ public class MeetingReadyInsightPolisher {
             if (s == null || s.isBlank()) continue;
             String lower = s.toLowerCase(Locale.ROOT);
             boolean generic = GENERIC_STRATEGY_PHRASES.stream().anyMatch(lower::contains);
-            if (!generic) out.add(s.trim());
+            if (generic) continue;
+            // Prefer evidence-grounded actions: number/target or owner—lever format.
+            boolean hasNumber = lower.chars().anyMatch(Character::isDigit);
+            boolean hasOwnerLever = s.contains("—") || s.contains(" - ");
+            if (!hasNumber && !hasOwnerLever) continue;
+            out.add(s.trim());
         }
         return out;
     }
@@ -286,19 +312,6 @@ public class MeetingReadyInsightPolisher {
     }
 
     private String formatEvidence(List<CollectedData> collected) {
-        if (collected == null) return "";
-        StringBuilder sb = new StringBuilder();
-        int n = 0;
-        for (CollectedData cd : collected) {
-            if (n >= 12) break;
-            if (cd.label() != null && cd.label().startsWith("Sample rows")) continue;
-            sb.append(cd.label()).append("\n");
-            if (cd.rows() != null) {
-                int rows = Math.min(4, cd.rows().size());
-                for (int i = 0; i < rows; i++) sb.append(cd.rows().get(i)).append("\n");
-            }
-            n++;
-        }
-        return sb.toString();
+        return InsightsSynthesisPacketBuilder.build(collected, Set.of()).evidenceText();
     }
 }

@@ -55,7 +55,7 @@ public interface InsightCardRepository extends JpaRepository<InsightCardEntity, 
            "WHERE c.tenantId = :tenantId AND c.status = 'AWAITING_CONFIRMATION'")
     int retireAllPendingCardsByTenantId(@Param("tenantId") UUID tenantId);
 
-    @Modifying
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional
     @Query("UPDATE InsightCardEntity c SET c.status = :status, c.actedAt = :now " +
            "WHERE c.id = :id AND c.clientId = :clientId")
@@ -64,7 +64,7 @@ public interface InsightCardRepository extends JpaRepository<InsightCardEntity, 
                      @Param("status") String status,
                      @Param("now") LocalDateTime now);
 
-    @Modifying
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional
     @Query("UPDATE InsightCardEntity c SET c.status = :status, c.actedAt = :now " +
            "WHERE c.id = :id AND c.tenantId = :tenantId")

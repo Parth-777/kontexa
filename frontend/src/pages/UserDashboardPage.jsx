@@ -15,6 +15,7 @@ import ChartRenderer from '../components/ChartRenderer';
 import CorrelationAnalysisCard from '../components/CorrelationAnalysisCard';
 import ExecutionTracePanel from '../components/ExecutionTracePanel';
 import GptPlannerPanel from '../components/GptPlannerPanel';
+import InsightsInbox from '../components/InsightsInbox';
 import SemanticShadowPanel from '../components/SemanticShadowPanel';
 import SqlDebugPanel from '../components/SqlDebugPanel';
 import TableRenderer from '../components/TableRenderer';
@@ -56,6 +57,10 @@ function normalizePersistedCard(entity) {
     chart:            parseChart(entity.chartSpec),
     generatedAt:      entity.generatedAt,
     status:           entity.status,
+    readAt:           entity.readAt,
+    unread:           entity.unread !== false
+      && entity.status !== 'COMPLETED'
+      && !entity.readAt,
     persisted:        true,
   };
 }
@@ -1040,11 +1045,39 @@ function UserDashboardPage() {
     }
   };
 
-  /** User understood — hide from feed; persist when card has a database id */
+  /** Mark read — stay in inbox with read styling */
   const handleMarkAsRead = async (item) => {
-    removeFromFeed(item);
+    const key = feedKey(item);
+    const markLocal = (card) =>
+      (card.id || card.title) === (item.id || item.title)
+        ? { ...card, unread: false, status: 'COMPLETED', readAt: new Date().toISOString() }
+        : card;
+    setFeedCards((prev) => prev.map(markLocal));
+    if (agentResult?.insights) {
+      setAgentResult((prev) => ({
+        ...prev,
+        insights: (prev.insights || []).map(markLocal),
+      }));
+    }
     if (item.id) {
       updateInsightStatus(tenantSchema, item.id, 'COMPLETED').catch(() => {});
+    }
+  };
+
+  const handleMarkUnread = async (item) => {
+    const markLocal = (card) =>
+      (card.id || card.title) === (item.id || item.title)
+        ? { ...card, unread: true, status: 'AWAITING_CONFIRMATION', readAt: null }
+        : card;
+    setFeedCards((prev) => prev.map(markLocal));
+    if (agentResult?.insights) {
+      setAgentResult((prev) => ({
+        ...prev,
+        insights: (prev.insights || []).map(markLocal),
+      }));
+    }
+    if (item.id) {
+      updateInsightStatus(tenantSchema, item.id, 'AWAITING_CONFIRMATION').catch(() => {});
     }
   };
 
@@ -1080,14 +1113,20 @@ function UserDashboardPage() {
   /* ── Visible cards ────────────────────────── */
   // After a fresh run use the live result; otherwise fall back to persisted feed
   const isVisible = (item) => !dismissed.has(feedKey(item));
-  const liveInsights     = (agentResult?.insights  || []).filter(isVisible);
+  const liveInsights     = (agentResult?.insights  || [])
+    .filter(isVisible)
+    .map((c) => ({
+      ...c,
+      unread: c.unread !== false && c.status !== 'COMPLETED',
+      generatedAt: c.generatedAt || new Date().toISOString(),
+    }));
   const liveAnomalies    = (agentResult?.anomalies || []).filter(isVisible);
-  const persistedVisible = agentResult ? [] : feedCards.filter(isVisible);
+  const persistedVisible = feedCards.filter(isVisible);
   const visibleInsights  = sortByImpact(agentResult ? liveInsights : persistedVisible);
-  const dailyBrief       = agentResult?.dailyBrief;
-  const visibleAnomalies = agentResult ? liveAnomalies : [];
+  const visibleAnomalies = liveAnomalies;
   const totalCards       = visibleInsights.length + visibleAnomalies.length;
-  const usingPersistedFeed = !agentResult && persistedVisible.length > 0;
+  const usingPersistedFeed = !agentResult && feedCards.length > 0;
+  const dailyBrief = agentResult?.dailyBrief || null;
 
   /* ══════════════════════════════════════════ */
   return (
@@ -1161,7 +1200,7 @@ function UserDashboardPage() {
                   className={`inbox-tab ${insightsView === 'feed' ? 'active' : ''}`}
                   onClick={() => setInsightsView('feed')}
                 >
-                  Feed
+                  Inbox
                 </button>
                 <button
                   type="button"
@@ -1208,82 +1247,20 @@ function UserDashboardPage() {
         <section className="app-main-body">
           {activeNav === 'insights' ? (
             insightsView === 'feed' ? (
-              <div className="inbox-feed">
-                {agentRunning ? (
-                  <div className="feed-loading">
-                    <div className="feed-loading-dots"><span/><span/><span/></div>
-                    <p>Agent is scanning your data for insights, trends, and anomalies...</p>
-                  </div>
-                ) : null}
-
-                {agentError && !agentRunning ? (
-                  <div className="feed-error">
-                    <p>⚠️ {agentError}</p>
-                  </div>
-                ) : null}
-
-                {dailyBrief && !agentRunning ? (
-                  <div className="feed-daily-brief">
-                    <p className="feed-daily-brief-label">Leadership brief</p>
-                    <p className="feed-daily-brief-text">{dailyBrief}</p>
-                  </div>
-                ) : null}
-
-                {usingPersistedFeed ? (
-                  <div className="feed-persisted-banner">
-                    Showing saved insights · Click <strong>Refresh Insights</strong> to run a new analysis
-                  </div>
-                ) : null}
-
-                {!agentRunning && !agentError && totalCards === 0 && !feedLoading ? (
-                  <div className="feed-empty">
-                    <div className="feed-empty-icon">🤖</div>
-                    <h2>No insights yet</h2>
-                    <p>Click <strong>Refresh Insights</strong> to let the agent scan your data for trends, anomalies, and opportunities.</p>
-                    <button className="feed-empty-btn" type="button" onClick={handleRefresh}>
-                      Run Analysis
-                    </button>
-                  </div>
-                ) : null}
-
-                {visibleInsights.map((card, i) => (
-                  <InsightCard
-                    key={card.id || i}
-                    card={card}
-                    showChart={hasInsightChart(card, chartItems)}
-                    onViewChart={handleViewChart}
-                    onMarkAsRead={handleMarkAsRead}
-                    onDismiss={handleDismiss}
-                  />
-                ))}
-
-                {visibleAnomalies.map((a) => (
-                  <AnomalyCard
-                    key={feedKey(a)}
-                    anomaly={a}
-                    onMarkAsRead={handleMarkAsRead}
-                    onDismiss={handleDismiss}
-                  />
-                ))}
-
-                {(() => {
-                  const questions = agentResult?.followUpQuestions?.length > 0
-                    ? agentResult.followUpQuestions
-                    : feedFollowUp;
-                  return questions.length > 0 && totalCards > 0 ? (
-                    <div className="feed-suggestions">
-                      <p className="feed-suggestions-label">Suggested questions</p>
-                      <div className="feed-suggestion-chips">
-                        {questions.map((q, i) => (
-                          <button key={i} className="feed-suggestion-chip" type="button" onClick={() => handleAsk(q)}>
-                            {q}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null;
-                })()}
-              </div>
+              <InsightsInbox
+                cards={visibleInsights}
+                loading={agentRunning || feedLoading}
+                error={agentError}
+                dailyBrief={dailyBrief}
+                usingPersistedFeed={usingPersistedFeed}
+                chartItems={chartItems}
+                onRefresh={handleRefresh}
+                onSelectRead={handleMarkAsRead}
+                onMarkUnread={handleMarkUnread}
+                onDismiss={handleDismiss}
+                onAskKontexa={handleAsk}
+                onViewChart={handleViewChart}
+              />
             ) : (
               <div className="charts-page">
                 <div className="charts-page-head">

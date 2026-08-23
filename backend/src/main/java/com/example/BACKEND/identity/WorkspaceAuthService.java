@@ -1,6 +1,7 @@
 package com.example.BACKEND.identity;
 
 import com.example.BACKEND.identity.WorkspaceIdentityDomain.*;
+import com.example.BACKEND.identity.auth.PasswordService;
 import com.example.BACKEND.identity.invite.InviteService;
 import com.example.BACKEND.tenant.TenantAuthService;
 import com.example.BACKEND.tenant.TenantCloudConnectionService;
@@ -45,19 +46,22 @@ public class WorkspaceAuthService {
     private final TenantAuthService legacyTenantAuth;
     private final UserAccessService legacyUserAuth;
     private final TenantCloudConnectionService cloudConnectionService;
+    private final PasswordService passwords;
 
     public WorkspaceAuthService(
             IdentityRepository identityRepo,
             InviteService inviteService,
             TenantAuthService legacyTenantAuth,
             UserAccessService legacyUserAuth,
-            TenantCloudConnectionService cloudConnectionService
+            TenantCloudConnectionService cloudConnectionService,
+            PasswordService passwords
     ) {
         this.identityRepo         = identityRepo;
         this.inviteService        = inviteService;
         this.legacyTenantAuth     = legacyTenantAuth;
         this.legacyUserAuth       = legacyUserAuth;
         this.cloudConnectionService = cloudConnectionService;
+        this.passwords            = passwords;
     }
 
     // ── Primary auth entry point ──────────────────────────────────────────────
@@ -135,10 +139,12 @@ public class WorkspaceAuthService {
             return Optional.empty();
         }
 
-        // Password check (plain-text comparison during transition; BCrypt-ready column name)
-        String storedHash = identity.passwordHash();
-        if (storedHash == null || !storedHash.equals(password)) {
+        PasswordService.LoginPasswordCheck check = passwords.check(password, identity.passwordHash());
+        if (!check.matched()) {
             return Optional.empty();
+        }
+        if (check.requiresRehash()) {
+            identityRepo.updatePasswordHash(identity.id(), passwords.hash(password));
         }
 
         // Resolve workspace details

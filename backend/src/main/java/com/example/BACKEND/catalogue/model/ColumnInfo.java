@@ -53,6 +53,18 @@ public class ColumnInfo {
     private String aggregationMethod;
     /** 0–1 confidence in the semantic enrichment; null if unknown. */
     private Double confidence;
+    /**
+     * Machine-readable Insights display unit: currency | percent | count | number | raw.
+     * Optional; Insights fails closed for currency formatting when absent/unscaled.
+     */
+    private String displayUnit;
+    /**
+     * Multiply raw warehouse value by this to obtain canonical business units.
+     * Null means scale is unknown.
+     */
+    private Double scaleToCanonical;
+    /** Conservative entity label for COUNT(*) language (sessions, rows, records). */
+    private String grainLabel;
     // Whether LLM enrichment ran on this column
     private boolean enriched = false;
 
@@ -120,6 +132,15 @@ public class ColumnInfo {
 
     public Double getConfidence() { return confidence; }
     public void setConfidence(Double confidence) { this.confidence = confidence; }
+
+    public String getDisplayUnit() { return displayUnit; }
+    public void setDisplayUnit(String displayUnit) { this.displayUnit = displayUnit; }
+
+    public Double getScaleToCanonical() { return scaleToCanonical; }
+    public void setScaleToCanonical(Double scaleToCanonical) { this.scaleToCanonical = scaleToCanonical; }
+
+    public String getGrainLabel() { return grainLabel; }
+    public void setGrainLabel(String grainLabel) { this.grainLabel = grainLabel; }
 
     public boolean isEnriched() { return enriched; }
     public void setEnriched(boolean enriched) { this.enriched = enriched; }

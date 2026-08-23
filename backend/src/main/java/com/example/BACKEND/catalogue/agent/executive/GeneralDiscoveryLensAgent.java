@@ -68,18 +68,24 @@ public class GeneralDiscoveryLensAgent {
     private InsightCandidate fromConcentration(CollectedData cd) {
         if (cd.rows().isEmpty()) return null;
         Map<String, Object> row = cd.rows().get(0);
+        if (!MetricEvidenceAnnotator.concentrationEvidenceOk(row,
+                (int) toDouble(row.get(MetricEvidenceAnnotator.SEGMENT_COUNT)))) {
+            return null;
+        }
         String metric = ExecutiveVoice.humanizeMetric(str(row.get("metric")));
         String dim = ExecutiveVoice.humanizeMetric(str(row.get("dimension")));
         String segment = str(row.get("top_segment"));
-        double share = toDouble(row.get("top_share_pct"));
+        double share = row.containsKey(MetricEvidenceAnnotator.SHARE_OF_TOTAL)
+                ? toDouble(row.get(MetricEvidenceAnnotator.SHARE_OF_TOTAL))
+                : toDouble(row.get("top_share_pct"));
 
         if (share < 35) return null;
 
         return new InsightCandidate(
-                metric + " concentration: " + segment + " holds " + fmtPct(share) + " via " + dim,
+                metric + " concentration: " + segment + " holds " + fmtPct(share) + " of total via " + dim,
                 InsightLens.GENERAL,
                 "",
-                share / 2 + 10,
+                Math.min(45, share),
                 share >= 55 ? "RISK" : "INFO",
                 share >= 55 ? "HIGH" : "MEDIUM",
                 List.of(cd.label()),
@@ -131,12 +137,23 @@ public class GeneralDiscoveryLensAgent {
         Map<String, Object> top = cd.rows().get(0);
         String segment = str(top.get("segment"));
         double value = toDouble(top.get("metric_value"));
+        MetricSemantics sem = MetricEvidenceAnnotator.fromRow(top);
 
-        double total = cd.rows().stream().mapToDouble(r -> toDouble(r.get("metric_value"))).sum();
-        double share = total > 0 ? (value / total) * 100.0 : 0;
+        double share;
+        String shareLabel;
+        if (MetricEvidenceAnnotator.hasGrandTotalShare(top)) {
+            share = toDouble(top.get(MetricEvidenceAnnotator.SHARE_OF_TOTAL));
+            shareLabel = "of total";
+        } else {
+            // Without grand total, do not claim "% of total"
+            double total = cd.rows().stream().mapToDouble(r -> toDouble(r.get("metric_value"))).sum();
+            share = total > 0 ? (value / total) * 100.0 : 0;
+            shareLabel = "of returned groups";
+        }
 
         String claim = metricPart + " leader: " + segment + " at "
-                + ExecutiveVoice.formatValue(value) + " (" + fmtPct(share) + " of top " + dimPart + " groups)";
+                + MetricDisplayFormatter.formatMetric(value, sem)
+                + " (" + fmtPct(share) + " " + shareLabel + ")";
 
         boolean tipOrFare = label.toLowerCase().contains("tip") || label.toLowerCase().contains("fare")
                 || label.toLowerCase().contains("amount");
@@ -145,11 +162,11 @@ public class GeneralDiscoveryLensAgent {
                 claim,
                 InsightLens.GENERAL,
                 "",
-                share + (tipOrFare ? 15 : 8),
+                Math.min(40, share) + (tipOrFare ? 5 : 0),
                 tipOrFare ? "OPPORTUNITY" : "INFO",
                 share >= 40 || tipOrFare ? "MEDIUM" : "LOW",
                 List.of(cd.label()),
-                highlights(segment, ExecutiveVoice.formatValue(value), dimPart),
+                highlights(segment, MetricDisplayFormatter.formatMetric(value, sem), dimPart),
                 extractColumns(cd.label()),
                 tipOrFare ? "Finance" : "Ops",
                 segment

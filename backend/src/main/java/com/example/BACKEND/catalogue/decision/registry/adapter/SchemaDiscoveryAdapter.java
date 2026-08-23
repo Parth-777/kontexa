@@ -9,7 +9,6 @@ import com.example.BACKEND.catalogue.schema.NestedSchemaFieldGraph;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 
 /**
@@ -92,13 +91,7 @@ public class SchemaDiscoveryAdapter {
      * (e.g. after re-running schema discovery) without throwing NonUniqueResultException.
      */
     private ClientCatalogueEntity latestApproved(String tenantId) {
-        return approvalService.listForClient(tenantId).stream()
-                .filter(c -> "APPROVED".equalsIgnoreCase(c.getStatus()))
-                .max(Comparator.comparing(
-                        c -> c.getUpdatedAt() != null ? c.getUpdatedAt() : c.getCreatedAt()))
-                .orElseThrow(() -> new IllegalStateException(
-                        "No approved catalogue found for tenant: " + tenantId
-                        + ". Please approve a catalogue in the admin dashboard."));
+        return approvalService.requireActiveApprovedCatalogue(tenantId);
     }
 
     private List<String> inferGrainKeys(CatalogueTableEntity table) {

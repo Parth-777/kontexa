@@ -8,6 +8,7 @@ import com.example.BACKEND.catalogue.decision.contracts.DecisionModels.Execution
 import com.example.BACKEND.catalogue.decision.runtime.DecisionRuntime;
 import com.example.BACKEND.catalogue.semantic.phase2.SemanticPlanningProperties;
 import com.example.BACKEND.catalogue.semantic.phase2.SemanticShadowResponseMapper;
+import com.example.BACKEND.identity.auth.AuthorizationService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -29,6 +30,7 @@ class DecisionRunStatusOwnershipTest {
     @Mock DecisionResponseMapper responseMapper;
     @Mock SemanticPlanningProperties plannerProperties;
     @Mock SemanticShadowResponseMapper shadowResponseMapper;
+    private final AuthorizationService authorization = new AuthorizationService();
 
     @AfterEach
     void clear() {
@@ -38,7 +40,7 @@ class DecisionRunStatusOwnershipTest {
     @Test
     void runStatusDeniesCrossTenantRunId() {
         DecisionController controller = new DecisionController(
-                runtime, responseMapper, plannerProperties, shadowResponseMapper);
+                runtime, responseMapper, plannerProperties, shadowResponseMapper, authorization);
 
         UUID runId = UUID.randomUUID();
         ExecutionRun foreignRun = new ExecutionRun(
@@ -58,7 +60,7 @@ class DecisionRunStatusOwnershipTest {
     @Test
     void runStatusAllowsOwnedRun() {
         DecisionController controller = new DecisionController(
-                runtime, responseMapper, plannerProperties, shadowResponseMapper);
+                runtime, responseMapper, plannerProperties, shadowResponseMapper, authorization);
 
         UUID runId = UUID.randomUUID();
         ExecutionRun owned = new ExecutionRun(

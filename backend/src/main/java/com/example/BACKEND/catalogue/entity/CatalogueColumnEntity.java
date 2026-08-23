@@ -75,6 +75,26 @@ public class CatalogueColumnEntity {
     @Column(name = "confidence")
     private Double confidence;
 
+    /**
+     * Machine-readable Insights display unit: currency | percent | count | number | raw.
+     * Optional; when absent, Insights fails closed for unit-sensitive formatting.
+     */
+    @Column(name = "display_unit", length = 40)
+    private String displayUnit;
+
+    /**
+     * Multiply raw warehouse value by this factor to obtain canonical business units.
+     * Example: micros→currency uses 1e-6. Null = unknown (fail closed for currency).
+     */
+    @Column(name = "scale_to_canonical")
+    private Double scaleToCanonical;
+
+    /**
+     * Conservative grain/entity label for COUNT language (sessions, rows, records).
+     */
+    @Column(name = "grain_label", length = 40)
+    private String grainLabel;
+
     @Column(name = "is_sensitive", nullable = false)
     private boolean sensitive = false;
 
@@ -122,6 +142,12 @@ public class CatalogueColumnEntity {
     public void   setDateGranularity(String s)           { this.dateGranularity = s; }
     public Double getConfidence()                        { return confidence; }
     public void   setConfidence(Double confidence)       { this.confidence = confidence; }
+    public String getDisplayUnit()                       { return displayUnit; }
+    public void   setDisplayUnit(String s)               { this.displayUnit = s; }
+    public Double getScaleToCanonical()                  { return scaleToCanonical; }
+    public void   setScaleToCanonical(Double d)          { this.scaleToCanonical = d; }
+    public String getGrainLabel()                        { return grainLabel; }
+    public void   setGrainLabel(String s)                { this.grainLabel = s; }
     public boolean isSensitive()                         { return sensitive; }
     public void    setSensitive(boolean b)               { this.sensitive = b; }
     public boolean isEnriched()                          { return enriched; }

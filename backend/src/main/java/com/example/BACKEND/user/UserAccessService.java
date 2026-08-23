@@ -1,5 +1,6 @@
 package com.example.BACKEND.user;
 
+import com.example.BACKEND.identity.auth.PasswordService;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -15,9 +16,11 @@ public class UserAccessService {
     public record UserLoginResult(String userId, String tenantId, String position, String tenantSchema) {}
 
     private final JdbcTemplate jdbcTemplate;
+    private final PasswordService passwords;
 
-    public UserAccessService(JdbcTemplate jdbcTemplate) {
+    public UserAccessService(JdbcTemplate jdbcTemplate, PasswordService passwords) {
         this.jdbcTemplate = jdbcTemplate;
+        this.passwords = passwords;
     }
 
     public Optional<UserLoginResult> authenticate(String userId, String password) {
@@ -27,7 +30,13 @@ public class UserAccessService {
 
         Map<String, Object> row = rows.getFirst();
         String stored = readString(row, "password_hash", "password", "psw", "passwd");
-        if (stored == null || !stored.equals(password)) return Optional.empty();
+        PasswordService.LoginPasswordCheck check = passwords.check(password, stored);
+        if (!check.matched()) return Optional.empty();
+        if (check.requiresRehash()) {
+            jdbcTemplate.update(
+                    "UPDATE public.app_users SET password_hash = ? WHERE LOWER(user_id) = LOWER(?)",
+                    passwords.hash(password), userId);
+        }
 
         Boolean active = readBoolean(row, "is_active", "active");
         if (active == null) active = true;
@@ -65,6 +74,7 @@ public class UserAccessService {
     }
 
     public void createUser(String tenantId, String userId, String password, String position, boolean active) {
+        String passwordHash = passwords.hash(password);
         java.util.UUID workspaceId = null;
         try {
             var ctx = com.example.BACKEND.tenancy.TenantContextHolder.get();
@@ -76,7 +86,7 @@ public class UserAccessService {
                 jdbcTemplate.update(
                         "INSERT INTO public.app_users (tenant_id, user_id, password_hash, position, is_active, workspace_id) "
                                 + "VALUES (?, ?, ?, ?, ?, ?)",
-                        tenantId, userId, password, position, active, workspaceId);
+                        tenantId, userId, passwordHash, position, active, workspaceId);
                 return;
             } catch (Exception ignored) {
                 // workspace_id column may not exist pre Phase B migration
@@ -85,7 +95,7 @@ public class UserAccessService {
         jdbcTemplate.update(
                 "INSERT INTO public.app_users (tenant_id, user_id, password_hash, position, is_active) "
                         + "VALUES (?, ?, ?, ?, ?)",
-                tenantId, userId, password, position, active);
+                tenantId, userId, passwordHash, position, active);
     }
 
     public void updateRole(String tenantId, String userId, String role) {
@@ -119,27 +129,16 @@ public class UserAccessService {
     }
 
     private String inferSchemaFromTenantId(String tenantId) {
-        if (tenantId == null) return "";
+        if (tenantId == null || tenantId.isBlank()) return "";
         return tenantId.trim();
-    }
-
-    private String asString(Object value) {
-        if (value == null) return null;
-        String out = String.valueOf(value).trim();
-        return out.isEmpty() ? null : out;
-    }
-
-    private Boolean asBoolean(Object value) {
-        if (value == null) return null;
-        if (value instanceof Boolean b) return b;
-        return Boolean.parseBoolean(String.valueOf(value));
     }
 
     private String readString(Map<String, Object> row, String... keys) {
         for (String key : keys) {
-            for (Map.Entry<String, Object> entry : row.entrySet()) {
-                if (entry.getKey().equalsIgnoreCase(key)) {
-                    return asString(entry.getValue());
+            for (Map.Entry<String, Object> e : row.entrySet()) {
+                if (e.getKey().equalsIgnoreCase(key) && e.getValue() != null) {
+                    String v = String.valueOf(e.getValue()).trim();
+                    if (!v.isEmpty()) return v;
                 }
             }
         }
@@ -148,12 +147,20 @@ public class UserAccessService {
 
     private Boolean readBoolean(Map<String, Object> row, String... keys) {
         for (String key : keys) {
-            for (Map.Entry<String, Object> entry : row.entrySet()) {
-                if (entry.getKey().equalsIgnoreCase(key)) {
-                    return asBoolean(entry.getValue());
+            for (Map.Entry<String, Object> e : row.entrySet()) {
+                if (e.getKey().equalsIgnoreCase(key) && e.getValue() != null) {
+                    Object v = e.getValue();
+                    if (v instanceof Boolean b) return b;
+                    return Boolean.parseBoolean(String.valueOf(v));
                 }
             }
         }
         return null;
+    }
+
+    private String asString(Object value) {
+        if (value == null) return null;
+        String s = String.valueOf(value).trim();
+        return s.isEmpty() ? null : s;
     }
 }

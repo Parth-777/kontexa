@@ -80,6 +80,41 @@ class SemanticCatalogueFactoryNestedTest {
     }
 
     @Test
+    void mismatchedSnapshotDoesNotMixOrdersIdentityWithNycColumns() throws Exception {
+        String nycJson = """
+                {
+                  "tables": [{
+                    "tableName": "nyc_taxi",
+                    "tableSchema": "nyc",
+                    "columns": [
+                      {"columnName":"RatecodeID","role":"metric","dataType":"INTEGER"}
+                    ]
+                  }]
+                }
+                """;
+        RegistryResolutionBundle ordersBundle = new RegistryResolutionBundle(
+                List.of(new EntityDescriptor("ORDERS", "ORDERS", List.of("ORDER_ID"), List.of())),
+                List.of(new MetricDescriptor("ORDERS.ORDER_ID", "COUNT(ORDERS.ORDER_ID)", "INTEGER", "COUNT", null)),
+                List.of(),
+                new ObjectiveDescriptor("RANKING", "RANKING", List.of()));
+
+        ApprovedCatalogueSnapshot catalogue = SemanticCatalogueFactory.catalogueFrom(
+                mapper.readTree(nycJson), ordersBundle);
+
+        String cols = catalogue.columns().stream()
+                .map(ApprovedCatalogueSnapshot.CatalogueColumn::columnName)
+                .toList()
+                .toString();
+        assertFalse(catalogue.tableRef().equalsIgnoreCase("ORDERS")
+                && cols.contains("RatecodeID"),
+                "must not mix ORDERS identity with NYC Taxi columns");
+        assertEquals("ORDERS", catalogue.tableRef());
+        assertFalse(cols.contains("RatecodeID"));
+        assertTrue(catalogue.columns().stream()
+                .anyMatch(c -> "ORDER_ID".equalsIgnoreCase(c.columnName())));
+    }
+
+    @Test
     void flatCatalogueBackwardCompatible() throws Exception {
         String json = """
                 {

@@ -13,7 +13,7 @@ public class TemporalDerivationEngine {
 
     private final WarehouseDialect dialect;
 
-    public TemporalDerivationEngine(BigQueryDialect dialect) {
+    public TemporalDerivationEngine(WarehouseDialect dialect) {
         this.dialect = dialect;
     }
 

@@ -24,47 +24,29 @@ public final class SemanticCatalogueFactory {
             JsonNode catalogueNode,
             RegistryResolutionBundle bundle
     ) {
-        String tableRef = tableRef(bundle);
-        JsonNode table = findTable(catalogueNode, tableRef);
-        String qualified = qualifiedName(table, tableRef);
+        boolean snapshotHasTables = catalogueNode != null
+                && catalogueNode.path("tables").isArray()
+                && !catalogueNode.path("tables").isEmpty();
 
-        List<ApprovedCatalogueSnapshot.CatalogueColumn> cols = new ArrayList<>();
-        if (table != null && table.path("columns").isArray()) {
-            for (JsonNode col : table.path("columns")) {
-                String name = col.path("columnName").asText("");
-                if (name.isBlank()) continue;
-                String role = col.path("role").asText("").toLowerCase(Locale.ROOT);
-                String description = firstNonBlank(
-                        col.path("businessMeaning").asText(null),
-                        col.path("description").asText(null));
-                String agg = col.path("aggregationMethod").asText(null);
-                if (agg == null || "NONE".equalsIgnoreCase(agg)) {
-                    agg = defaultAggFromBundle(bundle, name);
+        if (snapshotHasTables) {
+            String bundleTableRef = tableRef(bundle);
+            JsonNode table = findMatchingSnapshotTable(catalogueNode, bundleTableRef);
+            if (table != null) {
+                String tableName = table.path("tableName").asText("");
+                if (tableName.isBlank()) {
+                    tableName = bundleTableRef;
                 }
-                boolean container = col.path("container").asBoolean(false)
-                        || NestedSchemaFieldGraph.ROLE_CONTAINER.equalsIgnoreCase(role)
-                        || NestedSchemaFieldGraph.isNestedContainerType(col.path("dataType").asText(""));
-                String parentPath = col.path("parentPath").asText(null);
-                if (parentPath == null || parentPath.isBlank()) {
-                    parentPath = NestedSchemaFieldGraph.parentPath(name);
-                }
-                cols.add(new ApprovedCatalogueSnapshot.CatalogueColumn(
-                        name,
-                        role,
-                        col.path("dataType").asText("VARCHAR"),
-                        description,
-                        agg,
-                        parseSampleValues(col.path("sampleValues").asText("[]")),
-                        container,
-                        parentPath));
+                List<ApprovedCatalogueSnapshot.CatalogueColumn> cols =
+                        columnsFromSnapshotTable(table, bundle);
+                return new ApprovedCatalogueSnapshot(
+                        tableName, qualifiedName(table, tableName), List.copyOf(cols));
+            }
+            if (bundleHasIdentity(bundle)) {
+                return catalogueFromBundleOnly(bundle);
             }
         }
 
-        if (cols.isEmpty()) {
-            cols.addAll(columnsFromBundle(bundle));
-        }
-
-        return new ApprovedCatalogueSnapshot(tableRef, qualified, List.copyOf(cols));
+        return catalogueFromBundleOnly(bundle);
     }
 
     public static SchemaSnapshot schemaFrom(RegistryResolutionBundle bundle) {
@@ -101,14 +83,69 @@ public final class SemanticCatalogueFactory {
         return cols;
     }
 
-    private static JsonNode findTable(JsonNode catalogueNode, String tableRef) {
-        if (catalogueNode == null || tableRef == null) return null;
+    private static ApprovedCatalogueSnapshot catalogueFromBundleOnly(RegistryResolutionBundle bundle) {
+        String tableRef = tableRef(bundle);
+        return new ApprovedCatalogueSnapshot(tableRef, tableRef, List.copyOf(columnsFromBundle(bundle)));
+    }
+
+    private static boolean bundleHasIdentity(RegistryResolutionBundle bundle) {
+        if (bundle == null) {
+            return false;
+        }
+        return (bundle.entities() != null && !bundle.entities().isEmpty())
+                || (bundle.metrics() != null && !bundle.metrics().isEmpty());
+    }
+
+    private static List<ApprovedCatalogueSnapshot.CatalogueColumn> columnsFromSnapshotTable(
+            JsonNode table,
+            RegistryResolutionBundle bundle
+    ) {
+        List<ApprovedCatalogueSnapshot.CatalogueColumn> cols = new ArrayList<>();
+        if (table == null || !table.path("columns").isArray()) {
+            return cols;
+        }
+        for (JsonNode col : table.path("columns")) {
+            String name = col.path("columnName").asText("");
+            if (name.isBlank()) continue;
+            String role = col.path("role").asText("").toLowerCase(Locale.ROOT);
+            String description = firstNonBlank(
+                    col.path("businessMeaning").asText(null),
+                    col.path("description").asText(null));
+            String agg = col.path("aggregationMethod").asText(null);
+            if (agg == null || "NONE".equalsIgnoreCase(agg)) {
+                agg = defaultAggFromBundle(bundle, name);
+            }
+            boolean container = col.path("container").asBoolean(false)
+                    || NestedSchemaFieldGraph.ROLE_CONTAINER.equalsIgnoreCase(role)
+                    || NestedSchemaFieldGraph.isNestedContainerType(col.path("dataType").asText(""));
+            String parentPath = col.path("parentPath").asText(null);
+            if (parentPath == null || parentPath.isBlank()) {
+                parentPath = NestedSchemaFieldGraph.parentPath(name);
+            }
+            cols.add(new ApprovedCatalogueSnapshot.CatalogueColumn(
+                    name,
+                    role,
+                    col.path("dataType").asText("VARCHAR"),
+                    description,
+                    agg,
+                    parseSampleValues(col.path("sampleValues").asText("[]")),
+                    container,
+                    parentPath));
+        }
+        return cols;
+    }
+
+    /** Match snapshot table by name only. Never fall back to an unrelated tables[0]. */
+    private static JsonNode findMatchingSnapshotTable(JsonNode catalogueNode, String tableRef) {
+        if (catalogueNode == null || tableRef == null || tableRef.isBlank()
+                || "unknown".equalsIgnoreCase(tableRef)) {
+            return null;
+        }
         for (JsonNode table : catalogueNode.path("tables")) {
             String name = table.path("tableName").asText("");
-            if (tableRef.equalsIgnoreCase(name)) return table;
-        }
-        if (catalogueNode.path("tables").isArray() && !catalogueNode.path("tables").isEmpty()) {
-            return catalogueNode.path("tables").get(0);
+            if (tableRef.equalsIgnoreCase(name)) {
+                return table;
+            }
         }
         return null;
     }

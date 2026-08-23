@@ -39,6 +39,18 @@ public class TenantCloudConnectionService {
             String connectionLink
     ) {}
 
+    public record PostgresConfig(
+            String tenantId,
+            String host,
+            int port,
+            String database,
+            String schema,
+            String username,
+            String password,
+            boolean ssl,
+            String connectionLink
+    ) {}
+
     private final WorkspaceConnectorService workspaceConnectors;
     private final IdentityRepository identities;
     private final ObjectMapper objectMapper;
@@ -54,10 +66,14 @@ public class TenantCloudConnectionService {
     }
 
     public Optional<String> getRawConfig(UUID workspaceId) {
+        return getRawConfig(workspaceId, null);
+    }
+
+    public Optional<String> getRawConfig(UUID workspaceId, String warehouseType) {
         if (workspaceId == null) {
             return Optional.empty();
         }
-        return workspaceConnectors.getConnectorJson(workspaceId);
+        return workspaceConnectors.getConnectorJson(workspaceId, warehouseType);
     }
 
     /**
@@ -65,10 +81,14 @@ public class TenantCloudConnectionService {
      * Prefers workspace_connectors; falls back to user_credentials.
      */
     public Optional<String> getRawConfigBySlug(String tenantSlug) {
+        return getRawConfigBySlug(tenantSlug, null);
+    }
+
+    public Optional<String> getRawConfigBySlug(String tenantSlug, String warehouseType) {
         if (tenantSlug == null || tenantSlug.isBlank()) {
             return Optional.empty();
         }
-        return workspaceConnectors.getConnectorJsonLegacy(tenantSlug.trim());
+        return workspaceConnectors.getConnectorJsonLegacy(tenantSlug.trim(), warehouseType);
     }
 
     public void saveRawConfig(UUID workspaceId, String warehouseType, String credentialsJson,
@@ -83,7 +103,8 @@ public class TenantCloudConnectionService {
     }
 
     public Optional<BigQueryConfig> getBigQueryConfig(UUID workspaceId) {
-        return getRawConfig(workspaceId)
+        // Always resolve the BIGQUERY connector row — never a newer Snowflake/other row.
+        return getRawConfig(workspaceId, "BIGQUERY")
                 .filter(raw -> raw != null && !raw.isBlank())
                 .flatMap(raw -> parseBigQueryConfig(workspaceId.toString(), raw.trim()));
     }
@@ -96,7 +117,7 @@ public class TenantCloudConnectionService {
             Optional<BigQueryConfig> fromWs = getBigQueryConfig(wsId.get());
             if (fromWs.isPresent()) return fromWs;
         }
-        return getRawConfigBySlug(tenantId)
+        return getRawConfigBySlug(tenantId, "BIGQUERY")
                 .flatMap(raw -> parseBigQueryConfig(tenantId.trim(), raw.trim()));
     }
 
@@ -131,7 +152,7 @@ public class TenantCloudConnectionService {
     }
 
     public Optional<SnowflakeConfig> getSnowflakeConfig(UUID workspaceId) {
-        return getRawConfig(workspaceId)
+        return getRawConfig(workspaceId, "SNOWFLAKE")
                 .filter(raw -> raw != null && !raw.isBlank())
                 .flatMap(raw -> parseSnowflakeConfig(workspaceId.toString(), raw.trim()));
     }
@@ -143,8 +164,64 @@ public class TenantCloudConnectionService {
             Optional<SnowflakeConfig> fromWs = getSnowflakeConfig(wsId.get());
             if (fromWs.isPresent()) return fromWs;
         }
-        return getRawConfigBySlug(tenantId)
+        return getRawConfigBySlug(tenantId, "SNOWFLAKE")
                 .flatMap(raw -> parseSnowflakeConfig(tenantId.trim(), raw.trim()));
+    }
+
+    public Optional<PostgresConfig> getPostgresConfig(UUID workspaceId) {
+        return getRawConfig(workspaceId, "POSTGRESQL")
+                .filter(raw -> raw != null && !raw.isBlank())
+                .flatMap(raw -> parsePostgresConfig(workspaceId.toString(), raw.trim()));
+    }
+
+    public Optional<PostgresConfig> getPostgresConfig(String tenantId) {
+        if (tenantId == null || tenantId.isBlank()) return Optional.empty();
+        Optional<UUID> wsId = identities.findWorkspaceIdBySlug(tenantId.trim());
+        if (wsId.isPresent()) {
+            Optional<PostgresConfig> fromWs = getPostgresConfig(wsId.get());
+            if (fromWs.isPresent()) return fromWs;
+        }
+        return getRawConfigBySlug(tenantId, "POSTGRESQL")
+                .flatMap(raw -> parsePostgresConfig(tenantId.trim(), raw.trim()));
+    }
+
+    private Optional<PostgresConfig> parsePostgresConfig(String tenantId, String raw) {
+        try {
+            if (!raw.startsWith("{")) return Optional.empty();
+            JsonNode node = objectMapper.readTree(raw);
+            String provider = node.path("provider").asText("");
+            if (!"postgresql".equalsIgnoreCase(provider)) return Optional.empty();
+            String host = node.path("host").asText("").trim();
+            int port = PostgresConnectorService.DEFAULT_PORT;
+            JsonNode portNode = node.get("port");
+            if (portNode != null && !portNode.isNull() && !portNode.asText("").isBlank()) {
+                try {
+                    port = PostgresConnectorService.normalizePort(portNode.isNumber()
+                            ? portNode.asInt()
+                            : Integer.parseInt(portNode.asText().trim()));
+                } catch (Exception ex) {
+                    return Optional.empty();
+                }
+            }
+            String schema = node.path("schema").asText("").trim();
+            if (schema.isBlank()) {
+                schema = PostgresConnectorService.DEFAULT_SCHEMA;
+            }
+            boolean ssl = node.path("ssl").asBoolean(false);
+            return Optional.of(new PostgresConfig(
+                    tenantId,
+                    host,
+                    port,
+                    node.path("database").asText("").trim(),
+                    schema,
+                    node.path("username").asText("").trim(),
+                    node.path("password").asText("").trim(),
+                    ssl,
+                    node.path("connectionLink").asText("").trim()
+            ));
+        } catch (Exception ex) {
+            return Optional.empty();
+        }
     }
 
     private Optional<SnowflakeConfig> parseSnowflakeConfig(String tenantId, String raw) {
@@ -182,6 +259,8 @@ public class TenantCloudConnectionService {
     }
 
     public String getProvider(UUID workspaceId) {
+        // Active warehouse = most recently updated CONNECTED connector (any type).
+        // Do not hard-prefer BIGQUERY or SNOWFLAKE — multi-warehouse must follow last save.
         return getRawConfig(workspaceId)
                 .map(this::providerFromRaw)
                 .orElse("");
@@ -195,7 +274,9 @@ public class TenantCloudConnectionService {
             String p = getProvider(wsId.get());
             if (!p.isBlank()) return p;
         }
-        return getRawConfigBySlug(tenantId).map(this::providerFromRaw).orElse("");
+        return getRawConfigBySlug(tenantId)
+                .map(this::providerFromRaw)
+                .orElse("");
     }
 
     private String providerFromRaw(String raw) {

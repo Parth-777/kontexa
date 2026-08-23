@@ -16,6 +16,8 @@ public interface CatalogueSnapshotRepository extends JpaRepository<CatalogueSnap
 
     Optional<CatalogueSnapshotEntity> findByTenantId(UUID tenantId);
 
+    Optional<CatalogueSnapshotEntity> findFirstByCatalogueIdOrderByIdDesc(Long catalogueId);
+
     void deleteByClientId(String clientId);
 
     void deleteByTenantId(UUID tenantId);

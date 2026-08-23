@@ -5,6 +5,7 @@ import com.example.BACKEND.catalogue.entity.InsightCardEntity;
 import com.example.BACKEND.catalogue.charts.DynamicChartResponse;
 import com.example.BACKEND.catalogue.charts.DynamicChartService;
 import com.example.BACKEND.catalogue.repository.AgentReportRepository;
+import com.example.BACKEND.identity.auth.AuthorizationService;
 import com.example.BACKEND.tenant.TenantContextResolver;
 import com.example.BACKEND.tenancy.TenantContext;
 import org.springframework.http.ResponseEntity;
@@ -29,19 +30,22 @@ public class AgentDashboardController {
     private final ReportGenerationAgent reportAgent;
     private final AgentReportRepository reportRepository;
     private final DynamicChartService   dynamicChartService;
+    private final AuthorizationService  authorization;
 
     public AgentDashboardController(
             AgentOrchestrator    agentOrchestrator,
             TenantContextResolver tenantContextResolver,
             ReportGenerationAgent reportAgent,
             AgentReportRepository reportRepository,
-            DynamicChartService dynamicChartService
+            DynamicChartService dynamicChartService,
+            AuthorizationService authorization
     ) {
         this.agentOrchestrator  = agentOrchestrator;
         this.tenantContextResolver = tenantContextResolver;
         this.reportAgent        = reportAgent;
         this.reportRepository   = reportRepository;
         this.dynamicChartService = dynamicChartService;
+        this.authorization = authorization;
     }
 
     /** Triggers a fresh analysis + persists new insight cards. */
@@ -50,6 +54,7 @@ public class AgentDashboardController {
             @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
             @RequestBody(required = false) Map<String, Object> body
     ) {
+        authorization.requireCanQuery();
         String clientId = tenantContextResolver.resolveClientId(clientIdHeader, body);
         try {
             AgentDashboardResult result = agentOrchestrator.analyse(clientId);
@@ -93,6 +98,7 @@ public class AgentDashboardController {
             @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
             @RequestBody Map<String, Object> body
     ) {
+        authorization.requireCanQuery();
         String clientId = tenantContextResolver.resolveClientId(clientIdHeader, body);
         String request = body.get("request") == null ? null : String.valueOf(body.get("request")).trim();
         if (request == null || request.isBlank()) {
@@ -167,6 +173,7 @@ public class AgentDashboardController {
             @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
             @RequestBody(required = false) Map<String, String> body
     ) {
+        authorization.requireCanQuery();
         String clientId = tenantContextResolver.resolveClientId(
                 clientIdHeader, body != null ? body : Map.of());
         String type = (body != null && body.containsKey("type") && body.get("type") != null)
@@ -189,12 +196,16 @@ public class AgentDashboardController {
             @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
             @RequestBody Map<String, String> body
     ) {
+        authorization.requireCanQuery();
         String clientId = tenantContextResolver.resolveClientId(clientIdHeader, body);
         String newStatus = body.get("status");
 
-        if (newStatus == null || (!newStatus.equals("DECLINED") && !newStatus.equals("COMPLETED"))) {
+        if (newStatus == null || (!newStatus.equals("DECLINED")
+                && !newStatus.equals("COMPLETED")
+                && !newStatus.equals("AWAITING_CONFIRMATION"))) {
             return ResponseEntity.badRequest()
-                    .body(Map.of("error", "status must be COMPLETED (mark as read) or DECLINED (dismiss)"));
+                    .body(Map.of("error",
+                            "status must be COMPLETED (read), AWAITING_CONFIRMATION (unread), or DECLINED (dismiss)"));
         }
 
         String dismissReason = body.get("dismissReason");
@@ -215,6 +226,7 @@ public class AgentDashboardController {
             @RequestHeader(value = "X-Client-Id", required = false) String clientIdHeader,
             @RequestParam(value = "clientId", required = false) String clientIdParam
     ) {
+        authorization.requireCanQuery();
         String clientId = tenantContextResolver.resolveClientId(clientIdHeader, clientIdParam);
         int cleared = agentOrchestrator.clearPendingInsights(clientId);
         return ResponseEntity.ok(Map.of("cleared", cleared, "clientId", clientId));

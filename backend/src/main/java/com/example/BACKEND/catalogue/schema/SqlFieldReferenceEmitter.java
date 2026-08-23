@@ -1,5 +1,7 @@
 package com.example.BACKEND.catalogue.schema;
 
+import com.example.BACKEND.catalogue.decision.transforms.WarehouseDialect;
+
 import java.util.Arrays;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -24,6 +26,7 @@ public final class SqlFieldReferenceEmitter {
 
     /**
      * Emits a backtick-quoted reference per path segment for sampling and reserved names.
+     * Preserved for existing BigQuery catalogue/agent callers.
      */
     public static String emitQuotedReference(String fieldPath) {
         validateFieldPath(fieldPath);
@@ -33,6 +36,23 @@ public final class SqlFieldReferenceEmitter {
         }
         return Arrays.stream(normalized.split("\\."))
                 .map(SqlFieldReferenceEmitter::quoteSegment)
+                .collect(Collectors.joining("."));
+    }
+
+    /**
+     * Emits a dialect-quoted reference per path segment.
+     */
+    public static String emitQuotedReference(String fieldPath, WarehouseDialect dialect) {
+        validateFieldPath(fieldPath);
+        if (dialect == null) {
+            return emitQuotedReference(fieldPath);
+        }
+        String normalized = fieldPath.trim();
+        if (!normalized.contains(".")) {
+            return dialect.quoteIdent(normalized);
+        }
+        return Arrays.stream(normalized.split("\\."))
+                .map(dialect::quoteIdent)
                 .collect(Collectors.joining("."));
     }
 

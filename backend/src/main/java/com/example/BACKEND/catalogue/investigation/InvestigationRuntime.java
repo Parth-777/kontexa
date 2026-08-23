@@ -162,12 +162,35 @@ public class InvestigationRuntime implements InvestigationRuntimePort {
                     "Investigation cannot proceed: " + fieldValidation.summaryMessage());
         }
 
+        // Post-binder dimension contract: never reach requireDimension with a null dimension
+        // simply because GPT omitted the field (binder already applied when top-level dims exist).
+        EvidenceRequestDimensionContract.Evaluation dimensionGate =
+                EvidenceRequestDimensionContract.evaluate(plan);
+        if (dimensionGate.hasRejectedMissingDimension()) {
+            pathTrace.step("dimension_contract",
+                    "rejected=" + dimensionGate.rejected().size()
+                            + " executable=" + dimensionGate.executableRequests().size());
+            pathTrace.put("dimension_contract_issues", dimensionGate.toDiagnostics());
+        }
+        if (dimensionGate.allRequestsRejectedForMissingDimension(plan)) {
+            pathTrace.setRootCauseSummary(EvidenceRequestDimensionContract.MISSING_DIMENSION_REASON);
+            pathTrace.writeToFile(safeFileHint(question, runId));
+            pathTrace.logSummary();
+            recordTraceFacts(runId, pathTrace);
+            return narrativeRenderer.insufficient(runId,
+                    EvidenceRequestDimensionContract.MISSING_DIMENSION_REASON);
+        }
+
+        InvestigationPlan compilePlan =
+                EvidenceRequestDimensionContract.planForCompilation(plan, dimensionGate);
         EvidenceRequestSqlCompiler.CompiledProgram compiled =
-                requestSqlCompiler.compile(plan, tableRef);
+                requestSqlCompiler.compile(compilePlan, tableRef);
         pathTrace.step("compile", "compiled " + compiled.requests().size() + " request(s)");
 
         StringBuilder sqlJoined = new StringBuilder();
+        Map<String, EvidenceRequestSqlCompiler.CompiledRequest> compiledById = new LinkedHashMap<>();
         for (EvidenceRequestSqlCompiler.CompiledRequest cr : compiled.requests()) {
+            compiledById.put(cr.request().requestId(), cr);
             if (cr.ok()) {
                 pathTrace.addCompiledSql(
                         cr.request().requestId(), cr.request().kind(), true, cr.spec().sql(), null);
@@ -182,6 +205,14 @@ public class InvestigationRuntime implements InvestigationRuntimePort {
                         cr.request().requestId(), cr.request().kind(), false, null, cr.error());
             }
         }
+        for (EvidenceRequestDimensionContract.Rejected rejected : dimensionGate.rejected()) {
+            pathTrace.addCompiledSql(
+                    rejected.request().requestId(),
+                    rejected.request().kind(),
+                    false,
+                    null,
+                    rejected.reason());
+        }
         pathTrace.setGeneratedSql(sqlJoined.toString());
 
         List<QuerySpec> specs = compiled.executableSpecs();
@@ -193,8 +224,39 @@ public class InvestigationRuntime implements InvestigationRuntimePort {
 
         Map<String, QueryResult> byKey = toResultMap(results);
         List<EvidencePack.RequestResult> requestResults = new ArrayList<>();
-        for (EvidenceRequestSqlCompiler.CompiledRequest cr : compiled.requests()) {
-            InvestigationPlan.EvidenceRequest request = cr.request();
+        for (InvestigationPlan.EvidenceRequest request : plan.evidenceRequests()) {
+            if (request == null) {
+                continue;
+            }
+            EvidenceRequestDimensionContract.Rejected rejectedDim = null;
+            for (EvidenceRequestDimensionContract.Rejected r : dimensionGate.rejected()) {
+                if (request.requestId() != null
+                        && request.requestId().equals(r.request().requestId())) {
+                    rejectedDim = r;
+                    break;
+                }
+            }
+            if (rejectedDim != null) {
+                requestResults.add(EvidencePack.RequestResult.failure(
+                        request.requestId(),
+                        request.kind(),
+                        request.role(),
+                        request.hypothesisId(),
+                        request.evidencePurpose(),
+                        rejectedDim.reason()));
+                continue;
+            }
+            EvidenceRequestSqlCompiler.CompiledRequest cr = compiledById.get(request.requestId());
+            if (cr == null) {
+                requestResults.add(EvidencePack.RequestResult.failure(
+                        request.requestId(),
+                        request.kind(),
+                        request.role(),
+                        request.hypothesisId(),
+                        request.evidencePurpose(),
+                        "evidence request was not compiled"));
+                continue;
+            }
             if (!cr.ok()) {
                 requestResults.add(EvidencePack.RequestResult.failure(
                         request.requestId(),

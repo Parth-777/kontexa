@@ -13,7 +13,7 @@ import java.util.UUID;
 
 /**
  * Workspace-scoped connector management.
- * Primary store: workspace_connectors.
+ * Primary store: workspace_connectors (credentials sealed at rest via {@link ConnectorCredentialCipher}).
  * Legacy fallback: user_credentials.cloud_db_link (read-only during transition).
  */
 @Service
@@ -38,6 +38,7 @@ public class WorkspaceConnectorService {
 
     public void saveConnector(UUID workspaceId, String warehouseType, String credentialsJson,
                               String ipAddress, String userAgent) {
+        // Seal happens inside IdentityRepository.upsertConnector — never log credentialsJson.
         identities.upsertConnector(workspaceId, warehouseType, credentialsJson);
 
         UUID identityId = null;
@@ -50,7 +51,14 @@ public class WorkspaceConnectorService {
     }
 
     public Optional<String> getConnectorJson(UUID workspaceId) {
-        Optional<String> fromWorkspace = identities.findConnectorCredentials(workspaceId);
+        return getConnectorJson(workspaceId, null);
+    }
+
+    /**
+     * @param warehouseType optional filter ({@code BIGQUERY}, {@code SNOWFLAKE}); null = newest any type
+     */
+    public Optional<String> getConnectorJson(UUID workspaceId, String warehouseType) {
+        Optional<String> fromWorkspace = identities.findConnectorCredentials(workspaceId, warehouseType);
         if (fromWorkspace.isPresent() && !fromWorkspace.get().isBlank()) {
             return fromWorkspace;
         }
@@ -58,15 +66,24 @@ public class WorkspaceConnectorService {
     }
 
     public Optional<String> getConnectorJsonByWorkspaceSlug(String slug) {
+        return getConnectorJsonByWorkspaceSlug(slug, null);
+    }
+
+    public Optional<String> getConnectorJsonByWorkspaceSlug(String slug, String warehouseType) {
         return identities.findWorkspaceIdBySlug(slug)
-                .flatMap(this::getConnectorJson);
+                .flatMap(id -> getConnectorJson(id, warehouseType));
     }
 
     /**
      * Legacy read path — used when workspace UUID is unknown but tenant slug is available.
+     * Prefer typed workspace_connectors; fall back to user_credentials.cloud_db_link.
      */
     public Optional<String> getConnectorJsonLegacy(String tenantSlug) {
-        Optional<String> ws = getConnectorJsonByWorkspaceSlug(tenantSlug);
+        return getConnectorJsonLegacy(tenantSlug, null);
+    }
+
+    public Optional<String> getConnectorJsonLegacy(String tenantSlug, String warehouseType) {
+        Optional<String> ws = getConnectorJsonByWorkspaceSlug(tenantSlug, warehouseType);
         if (ws.isPresent()) return ws;
 
         try {

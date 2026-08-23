@@ -2,6 +2,7 @@ package com.example.BACKEND.catalogue.agent.executive;
 
 import com.example.BACKEND.catalogue.agent.AgentDashboardResult;
 import com.example.BACKEND.catalogue.agent.CollectedData;
+import com.example.BACKEND.catalogue.agent.InsightsSynthesisPacketBuilder;
 import com.example.BACKEND.catalogue.llm.OpenAiClient;
 import com.example.BACKEND.catalogue.service.TenantBusinessProfileService;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -10,6 +11,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Narrates verified {@link InsightCandidate}s in C-suite voice (So What / Why / Now What).
@@ -17,8 +19,6 @@ import java.util.List;
 @Service
 public class ExecutiveNarrator {
 
-    private static final int MAX_DATASETS = 15;
-    private static final int ROWS_PER_DS  = 6;
     private static final int BRIEF_MAX_CHARS = 520;
 
     private final OpenAiClient openAiClient;
@@ -302,7 +302,7 @@ public class ExecutiveNarrator {
             }
         }
         sb.append("\nSUPPORTING EVIDENCE:\n");
-        sb.append(formatCollectedData(collected));
+        sb.append(formatCollectedData(collected, candidates));
         return sb.toString();
     }
 
@@ -385,29 +385,22 @@ public class ExecutiveNarrator {
             card.setMetricHighlights(c.metricHighlights());
             card.setSourceColumns(c.sourceColumns());
             card.setReasons(List.of(headline));
-            card.setStrategies(List.of(
-                    c.suggestedOwner() + ": Align cross-functional response within 30 days."));
+            // No invented consulting strategies — empty until evidence-backed actions exist.
+            card.setStrategies(List.of());
             cards.add(card);
         }
         return cards;
     }
 
     private String formatCollectedData(List<CollectedData> collected) {
-        if (collected == null) return "";
-        StringBuilder sb = new StringBuilder();
-        int count = 0;
-        for (CollectedData cd : collected) {
-            if (count >= MAX_DATASETS) break;
-            if (cd.label() != null && cd.label().startsWith("Sample rows")) continue;
-            sb.append("\n## ").append(cd.label()).append("\n");
-            var rows = cd.rows();
-            int show = Math.min(rows.size(), ROWS_PER_DS);
-            for (int i = 0; i < show; i++) {
-                sb.append(rows.get(i)).append("\n");
-            }
-            count++;
-        }
-        return sb.toString();
+        return InsightsSynthesisPacketBuilder.build(collected, Set.of()).evidenceText();
+    }
+
+    private String formatCollectedData(
+            List<CollectedData> collected, List<InsightCandidate> candidates) {
+        return InsightsSynthesisPacketBuilder.build(
+                collected, InsightsSynthesisPacketBuilder.columnsFromCandidates(candidates))
+                .evidenceText();
     }
 
     private String formatCards(List<AgentDashboardResult.InsightCard> cards) {

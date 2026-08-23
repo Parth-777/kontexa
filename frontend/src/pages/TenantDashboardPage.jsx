@@ -2,15 +2,23 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   connectTenantBigQuery,
+  connectTenantPostgres,
+  connectTenantSnowflake,
   inviteWorkspaceMember,
   deleteTenantUser,
   fetchTenantBigQueryConfig,
   fetchTenantBigQueryTables,
+  fetchTenantPostgresConfig,
+  fetchTenantPostgresTables,
+  fetchTenantSnowflakeConfig,
+  fetchTenantSnowflakeTables,
   fetchTenantUsers,
   fetchWorkspaceMembers,
   resendWorkspaceInvite,
   revokeWorkspaceInvite,
   testTenantBigQueryConnection,
+  testTenantPostgresConnection,
+  testTenantSnowflakeConnection,
   updateTenantUserRole,
   updateTenantUserStatus,
   updateWorkspaceMemberRole,
@@ -23,7 +31,7 @@ import {
   rejectCatalogue,
   saveCatalogue,
 } from '../api/catalogueApi';
-import { clearSession, getSession, saveSession } from '../api/session';
+import { clearSession, getSession, isAuthFailureMessage, saveSession } from '../api/session';
 import './TenantDashboardPage.css';
 
 const ROLES = ['ADMIN', 'ANALYST', 'VIEWER'];
@@ -77,10 +85,20 @@ const WAREHOUSE_SOURCES = [
     label: 'Snowflake',
     provider: 'Snowflake',
     category: 'Warehouse',
-    available: false,
+    available: true,
     color: '#29B5E8',
     initials: 'SF',
-    description: 'Connect to Snowflake using account identifier and OAuth or password auth.',
+    description: 'Connect to Snowflake using account identifier, warehouse, and password credentials.',
+  },
+  {
+    id: 'postgresql',
+    label: 'PostgreSQL',
+    provider: 'PostgreSQL',
+    category: 'Warehouse',
+    available: true,
+    color: '#336791',
+    initials: 'PG',
+    description: 'Connect to a customer PostgreSQL database using host, database, schema, and password credentials.',
   },
   {
     id: 'redshift',
@@ -155,6 +173,31 @@ function TenantDashboardPage() {
     projectId: '', location: '', dataset: '', serviceAccountJson: '',
   });
 
+  const [snowflakeConnected,     setSnowflakeConnected]     = useState(false);
+  const [snowflakeTables,        setSnowflakeTables]        = useState([]);
+  const [snowflakeFeedback,      setSnowflakeFeedback]      = useState('');
+  const [snowflakeError,         setSnowflakeError]         = useState('');
+  const [testingSnowflake,       setTestingSnowflake]       = useState(false);
+  const [connectingSnowflake,    setConnectingSnowflake]    = useState(false);
+  const [loadingSnowflakeTables, setLoadingSnowflakeTables] = useState(false);
+  const [snowflakeCredentialsStored, setSnowflakeCredentialsStored] = useState(false);
+  const [lastConnectedWarehouse, setLastConnectedWarehouse] = useState(''); // 'bigquery' | 'snowflake' | 'postgresql'
+  const [snowflakeForm,          setSnowflakeForm]          = useState({
+    account: '', warehouse: '', database: '', schema: 'PUBLIC', username: '', password: '',
+  });
+
+  const [postgresConnected,          setPostgresConnected]          = useState(false);
+  const [postgresTables,             setPostgresTables]             = useState([]);
+  const [postgresFeedback,           setPostgresFeedback]           = useState('');
+  const [postgresError,              setPostgresError]              = useState('');
+  const [testingPostgres,            setTestingPostgres]            = useState(false);
+  const [connectingPostgres,         setConnectingPostgres]         = useState(false);
+  const [loadingPostgresTables,      setLoadingPostgresTables]      = useState(false);
+  const [postgresCredentialsStored,  setPostgresCredentialsStored]  = useState(false);
+  const [postgresForm,               setPostgresForm]               = useState({
+    host: '', port: '5432', database: '', schema: 'public', username: '', password: '', ssl: false,
+  });
+
   const [catalogues,           setCatalogues]           = useState([]);
   const [loadingCatalogues,    setLoadingCatalogues]    = useState(false);
   const [catalogueFeedback,    setCatalogueFeedback]    = useState('');
@@ -213,11 +256,25 @@ function TenantDashboardPage() {
     async function loadData() {
       setLoadingCatalogues(true);
       try {
-        const [_, bigQueryPayload, cataloguePayload] = await Promise.all([
+        const [_, bigQueryPayload, snowflakePayload, postgresPayload, cataloguePayload] = await Promise.all([
           loadTeamMembers(),
-          fetchTenantBigQueryConfig(tenantId).catch(() => ({ connected: false })),
+          fetchTenantBigQueryConfig(tenantId).catch((err) => {
+            if (isAuthFailureMessage(err?.message)) throw err;
+            return { connected: false };
+          }),
+          fetchTenantSnowflakeConfig(tenantId).catch((err) => {
+            if (isAuthFailureMessage(err?.message)) throw err;
+            return { connected: false };
+          }),
+          fetchTenantPostgresConfig(tenantId).catch((err) => {
+            if (isAuthFailureMessage(err?.message)) throw err;
+            return { connected: false };
+          }),
           (tenantId || tenantSchema)
-            ? listCataloguesForTenantContext({ tenantId, tenantSchema }).catch(() => [])
+            ? listCataloguesForTenantContext({ tenantId, tenantSchema }).catch((err) => {
+              if (isAuthFailureMessage(err?.message)) throw err;
+              return [];
+            })
             : Promise.resolve([]),
         ]);
         setBigQueryConnected(Boolean(bigQueryPayload.connected));
@@ -231,6 +288,42 @@ function TenantDashboardPage() {
           dataset:   bigQueryPayload.dataset    || '',
           serviceAccountJson: '',
         }));
+        setSnowflakeConnected(Boolean(snowflakePayload.connected));
+        setSnowflakeCredentialsStored(Boolean(snowflakePayload.credentialsStored));
+        setSnowflakeTables([]);
+        setSnowflakeForm((c) => ({
+          ...c,
+          account:   snowflakePayload.account   || '',
+          warehouse: snowflakePayload.warehouse || '',
+          database:  snowflakePayload.database  || '',
+          schema:    snowflakePayload.schema    || 'PUBLIC',
+          username:  '',
+          password:  '',
+        }));
+        setPostgresConnected(Boolean(postgresPayload.connected));
+        setPostgresCredentialsStored(Boolean(postgresPayload.credentialsStored));
+        setPostgresTables([]);
+        setPostgresForm((c) => ({
+          ...c,
+          host: postgresPayload.host || '',
+          port: postgresPayload.port != null && postgresPayload.port !== '' ? String(postgresPayload.port) : '5432',
+          database: postgresPayload.database || '',
+          schema: postgresPayload.schema || 'public',
+          username: '',
+          password: '',
+          ssl: Boolean(postgresPayload.ssl),
+        }));
+        const connectedIds = [
+          bigQueryPayload.connected ? 'bigquery' : null,
+          snowflakePayload.connected ? 'snowflake' : null,
+          postgresPayload.connected ? 'postgresql' : null,
+        ].filter(Boolean);
+        if (connectedIds.length === 1) {
+          setSelectedWarehouse(connectedIds[0]);
+          setLastConnectedWarehouse(connectedIds[0]);
+        } else if (connectedIds.length > 1) {
+          setLastConnectedWarehouse('');
+        }
         setCatalogues(cataloguePayload);
       } catch (err) {
         setErrorMessage(err.message || 'Failed to load workspace data');
@@ -263,6 +356,29 @@ function TenantDashboardPage() {
   const approvedCatalogue = catalogues.find((c) => String(c.status || '').toUpperCase() === 'APPROVED');
   const activeUserCount   = users.filter((u) => u.lifecycleStatus === 'ACTIVE' || u.isActive).length;
   const invitedUserCount  = users.filter((u) => u.lifecycleStatus === 'INVITED' || u.lifecycleStatus === 'EXPIRED').length;
+  const warehouseConnected = bigQueryConnected || snowflakeConnected || postgresConnected;
+  const connectedWarehouseLabels = [
+    bigQueryConnected ? 'BigQuery' : null,
+    snowflakeConnected ? 'Snowflake' : null,
+    postgresConnected ? 'PostgreSQL' : null,
+  ].filter(Boolean);
+  const activeWarehouseLabel = connectedWarehouseLabels.length === 1
+    ? connectedWarehouseLabels[0]
+    : warehouseConnected
+      ? 'Warehouse connected'
+      : 'Not connected';
+  const activeWarehouseSub = warehouseConnected ? connectedWarehouseLabels.join(' + ') : 'No warehouse';
+  const catalogueSourceLabel = lastConnectedWarehouse === 'postgresql'
+    ? 'PostgreSQL'
+    : lastConnectedWarehouse === 'snowflake'
+      ? 'Snowflake'
+      : lastConnectedWarehouse === 'bigquery'
+        ? 'BigQuery'
+        : connectedWarehouseLabels.length === 1
+          ? connectedWarehouseLabels[0]
+          : warehouseConnected
+            ? 'most recently connected warehouse'
+            : null;
 
   // ── User handlers ────────────────────────────────────────────────────────
   const handleAddUser = async (event) => {
@@ -441,6 +557,7 @@ function TenantDashboardPage() {
       setBigQueryConnectionLink(savedLink);
       setBigQueryConnected(true);
       setServiceAccountStored(true);
+      setLastConnectedWarehouse('bigquery');
       setBigQueryTables([]);
       saveSession({ ...tenantSession, cloudDbLink: savedLink });
       setBigQueryForm((c) => ({ ...c, serviceAccountJson: '' }));
@@ -466,6 +583,172 @@ function TenantDashboardPage() {
       setBigQueryError(err.message || 'Failed to load BigQuery tables');
     } finally {
       setLoadingBigQueryTables(false);
+    }
+  };
+
+  // ── Snowflake handlers ───────────────────────────────────────────────────
+  const handleSnowflakeField = (key, value) => setSnowflakeForm((c) => ({ ...c, [key]: value }));
+
+  const handleTestSnowflake = async (event) => {
+    event.preventDefault();
+    if (!snowflakeForm.account.trim() || !snowflakeForm.warehouse.trim()
+      || !snowflakeForm.database.trim() || !snowflakeForm.username.trim() || !snowflakeForm.password) {
+      setSnowflakeError('Account, warehouse, database, username, and password are required.');
+      return;
+    }
+    setSnowflakeFeedback(''); setSnowflakeError('');
+    try {
+      setTestingSnowflake(true);
+      const payload = await testTenantSnowflakeConnection({
+        account: snowflakeForm.account.trim(),
+        warehouse: snowflakeForm.warehouse.trim(),
+        database: snowflakeForm.database.trim(),
+        schema: snowflakeForm.schema.trim() || 'PUBLIC',
+        username: snowflakeForm.username.trim(),
+        password: snowflakeForm.password,
+      });
+      setSnowflakeFeedback(`Connection successful. Link: ${payload.connectionLink || ''}`);
+    } catch (err) {
+      setSnowflakeError(err.message || 'Snowflake test failed');
+    } finally {
+      setTestingSnowflake(false);
+    }
+  };
+
+  const handleConnectSnowflake = async (event) => {
+    event.preventDefault();
+    if (!tenantId) return;
+    if (!snowflakeForm.account.trim() || !snowflakeForm.warehouse.trim()
+      || !snowflakeForm.database.trim() || !snowflakeForm.username.trim() || !snowflakeForm.password) {
+      setSnowflakeError('Account, warehouse, database, username, and password are required.');
+      return;
+    }
+    setSnowflakeFeedback(''); setSnowflakeError('');
+    try {
+      setConnectingSnowflake(true);
+      const payload = await connectTenantSnowflake({
+        tenantId,
+        account: snowflakeForm.account.trim(),
+        warehouse: snowflakeForm.warehouse.trim(),
+        database: snowflakeForm.database.trim(),
+        schema: snowflakeForm.schema.trim() || 'PUBLIC',
+        username: snowflakeForm.username.trim(),
+        password: snowflakeForm.password,
+      });
+      setSnowflakeConnected(true);
+      setSnowflakeCredentialsStored(true);
+      setLastConnectedWarehouse('snowflake');
+      setSnowflakeTables([]);
+      setSnowflakeForm((c) => ({ ...c, password: '', username: c.username }));
+      setSnowflakeFeedback('Snowflake connected and configuration saved successfully.');
+      if (payload.connectionLink) {
+        saveSession({ ...getSession(), cloudDbLink: payload.connectionLink });
+      }
+    } catch (err) {
+      setSnowflakeError(err.message || 'Failed to connect Snowflake');
+    } finally {
+      setConnectingSnowflake(false);
+    }
+  };
+
+  const handleLoadSnowflakeTables = async () => {
+    if (!tenantId) return;
+    setSnowflakeError(''); setSnowflakeFeedback('');
+    try {
+      setLoadingSnowflakeTables(true);
+      const payload = await fetchTenantSnowflakeTables(tenantId);
+      setSnowflakeTables(payload.tables || []);
+      setSnowflakeFeedback(`Loaded ${payload.tableCount || 0} tables from Snowflake.`);
+    } catch (err) {
+      setSnowflakeError(err.message || 'Failed to load Snowflake tables');
+    } finally {
+      setLoadingSnowflakeTables(false);
+    }
+  };
+
+  const postgresPortValue = () => {
+    const parsed = Number.parseInt(String(postgresForm.port || '').trim(), 10);
+    return Number.isFinite(parsed) ? parsed : 5432;
+  };
+
+  const handlePostgresField = (key, value) => setPostgresForm((c) => ({ ...c, [key]: value }));
+
+  const handleTestPostgres = async (event) => {
+    event.preventDefault();
+    if (!postgresForm.host.trim() || !postgresForm.database.trim()
+      || !postgresForm.username.trim() || !postgresForm.password) {
+      setPostgresError('Host, database, username, and password are required.');
+      return;
+    }
+    setPostgresFeedback(''); setPostgresError('');
+    try {
+      setTestingPostgres(true);
+      const payload = await testTenantPostgresConnection({
+        host: postgresForm.host.trim(),
+        port: postgresPortValue(),
+        database: postgresForm.database.trim(),
+        schema: postgresForm.schema.trim() || 'public',
+        username: postgresForm.username.trim(),
+        password: postgresForm.password,
+        ssl: Boolean(postgresForm.ssl),
+      });
+      setPostgresFeedback(`Connection successful. Link: ${payload.connectionLink || ''}`);
+    } catch (err) {
+      setPostgresError(err.message || 'PostgreSQL test failed');
+    } finally {
+      setTestingPostgres(false);
+    }
+  };
+
+  const handleConnectPostgres = async (event) => {
+    event.preventDefault();
+    if (!tenantId) return;
+    if (!postgresForm.host.trim() || !postgresForm.database.trim()
+      || !postgresForm.username.trim() || !postgresForm.password) {
+      setPostgresError('Host, database, username, and password are required.');
+      return;
+    }
+    setPostgresFeedback(''); setPostgresError('');
+    try {
+      setConnectingPostgres(true);
+      const payload = await connectTenantPostgres({
+        tenantId,
+        host: postgresForm.host.trim(),
+        port: postgresPortValue(),
+        database: postgresForm.database.trim(),
+        schema: postgresForm.schema.trim() || 'public',
+        username: postgresForm.username.trim(),
+        password: postgresForm.password,
+        ssl: Boolean(postgresForm.ssl),
+      });
+      setPostgresConnected(true);
+      setPostgresCredentialsStored(true);
+      setLastConnectedWarehouse('postgresql');
+      setPostgresTables([]);
+      setPostgresForm((c) => ({ ...c, password: '' }));
+      setPostgresFeedback('PostgreSQL connected and configuration saved successfully.');
+      if (payload.connectionLink) {
+        saveSession({ ...getSession(), cloudDbLink: payload.connectionLink });
+      }
+    } catch (err) {
+      setPostgresError(err.message || 'Failed to connect PostgreSQL');
+    } finally {
+      setConnectingPostgres(false);
+    }
+  };
+
+  const handleLoadPostgresTables = async () => {
+    if (!tenantId) return;
+    setPostgresError(''); setPostgresFeedback('');
+    try {
+      setLoadingPostgresTables(true);
+      const payload = await fetchTenantPostgresTables(tenantId);
+      setPostgresTables(payload.tables || []);
+      setPostgresFeedback(`Loaded ${payload.tableCount || 0} tables from PostgreSQL.`);
+    } catch (err) {
+      setPostgresError(err.message || 'Failed to load PostgreSQL tables');
+    } finally {
+      setLoadingPostgresTables(false);
     }
   };
 
@@ -551,10 +834,10 @@ function TenantDashboardPage() {
           <span className="stat-value">{catalogues.length}</span>
           <span className="stat-sub">{approvedCatalogue ? '1 approved' : 'none approved'}</span>
         </div>
-        <div className={`stat-card ${bigQueryConnected ? 'stat-card--success' : 'stat-card--warn'}`}>
+        <div className={`stat-card ${warehouseConnected ? 'stat-card--success' : 'stat-card--warn'}`}>
           <span className="stat-label">Data Source</span>
-          <span className="stat-value stat-value--sm">{bigQueryConnected ? 'Connected' : 'Not connected'}</span>
-          <span className="stat-sub">BigQuery</span>
+          <span className="stat-value stat-value--sm">{warehouseConnected ? 'Connected' : 'Not connected'}</span>
+          <span className="stat-sub">{activeWarehouseSub}</span>
         </div>
         <div className={`stat-card ${approvedCatalogue ? 'stat-card--success' : 'stat-card--muted'}`}>
           <span className="stat-label">Workspace</span>
@@ -563,21 +846,21 @@ function TenantDashboardPage() {
         </div>
       </div>
 
-      {!bigQueryConnected ? (
+      {!warehouseConnected ? (
         <div className="cta-banner">
           <div className="cta-banner-left">
             <p className="cta-banner-title">Connect your data warehouse</p>
-            <p className="cta-banner-sub">Link BigQuery to start generating catalogues and enabling analysis.</p>
+            <p className="cta-banner-sub">Link BigQuery or Snowflake to start generating catalogues and enabling analysis.</p>
           </div>
           <button className="btn-primary" onClick={() => setActiveSection('connections')}>
-            Connect BigQuery →
+            Connect warehouse →
           </button>
         </div>
       ) : !approvedCatalogue ? (
         <div className="cta-banner cta-banner--connected">
           <div className="cta-banner-left">
             <p className="cta-banner-title">Generate your first catalogue</p>
-            <p className="cta-banner-sub">BigQuery is connected. Generate and approve a catalogue to enable your team.</p>
+            <p className="cta-banner-sub">{activeWarehouseSub} is connected. Generate and approve a catalogue to enable your team.</p>
           </div>
           <button className="btn-primary" onClick={() => setActiveSection('catalogues')}>
             Manage Catalogues →
@@ -779,13 +1062,261 @@ function TenantDashboardPage() {
     </div>
   );
 
+  const renderSnowflakeConfig = () => (
+    <div className="connector-steps">
+      <div className="connector-step">
+        <div className="step-badge">1</div>
+        <div className="step-content">
+          <p className="step-title">Account &amp; Warehouse</p>
+          <div className="step-fields">
+            <div className="field-group">
+              <label className="field-label">Account identifier <span className="field-required">*</span></label>
+              <input
+                className="field-input"
+                type="text"
+                value={snowflakeForm.account}
+                onChange={(e) => handleSnowflakeField('account', e.target.value)}
+                placeholder="xy12345.us-east-1 or orgname-account"
+              />
+            </div>
+            <div className="field-row">
+              <div className="field-group">
+                <label className="field-label">Warehouse <span className="field-required">*</span></label>
+                <input
+                  className="field-input"
+                  type="text"
+                  value={snowflakeForm.warehouse}
+                  onChange={(e) => handleSnowflakeField('warehouse', e.target.value)}
+                  placeholder="COMPUTE_WH"
+                />
+                <p className="step-sub">Compute warehouse name (not the account identifier).</p>
+              </div>
+              <div className="field-group">
+                <label className="field-label">Database <span className="field-required">*</span></label>
+                <input
+                  className="field-input"
+                  type="text"
+                  value={snowflakeForm.database}
+                  onChange={(e) => handleSnowflakeField('database', e.target.value)}
+                  placeholder="ANALYTICS"
+                />
+              </div>
+            </div>
+            <div className="field-group">
+              <label className="field-label">Schema <span className="field-optional">optional</span></label>
+              <input
+                className="field-input"
+                type="text"
+                value={snowflakeForm.schema}
+                onChange={(e) => handleSnowflakeField('schema', e.target.value)}
+                placeholder="PUBLIC"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="connector-step">
+        <div className="step-badge">2</div>
+        <div className="step-content">
+          <p className="step-title">Credentials <span className="field-required">*</span></p>
+          <div className="step-fields">
+            <div className="field-group">
+              <label className="field-label">Username <span className="field-required">*</span></label>
+              <input
+                className="field-input"
+                type="text"
+                autoComplete="username"
+                value={snowflakeForm.username}
+                onChange={(e) => handleSnowflakeField('username', e.target.value)}
+                placeholder={snowflakeCredentialsStored ? 'Re-enter username to update' : 'SNOWFLAKE_USER'}
+              />
+            </div>
+            <div className="field-group">
+              <label className="field-label">Password <span className="field-required">*</span></label>
+              <input
+                className="field-input"
+                type="password"
+                autoComplete="current-password"
+                value={snowflakeForm.password}
+                onChange={(e) => handleSnowflakeField('password', e.target.value)}
+                placeholder={snowflakeCredentialsStored ? 'Re-enter password to reconnect' : '••••••••'}
+              />
+            </div>
+          </div>
+          {snowflakeCredentialsStored && (
+            <p className="step-sub" style={{ marginTop: 8 }}>
+              Credentials are already stored encrypted. Re-enter them to test or update the connection.
+            </p>
+          )}
+        </div>
+      </div>
+
+      <div className="connector-step">
+        <div className="step-badge">3</div>
+        <div className="step-content">
+          <p className="step-title">Test &amp; Activate</p>
+          <p className="step-sub">Validate credentials before saving to ensure the connection works.</p>
+          <div className="step-actions">
+            <button
+              className="btn-secondary"
+              type="button"
+              onClick={handleTestSnowflake}
+              disabled={testingSnowflake || connectingSnowflake}
+            >
+              {testingSnowflake ? 'Testing…' : 'Test Connection'}
+            </button>
+            <button
+              className="btn-primary"
+              type="button"
+              onClick={handleConnectSnowflake}
+              disabled={testingSnowflake || connectingSnowflake}
+            >
+              {connectingSnowflake ? 'Connecting…' : 'Connect & Save'}
+            </button>
+          </div>
+          {snowflakeFeedback && <p className="feedback-msg feedback-success">{snowflakeFeedback}</p>}
+          {snowflakeError && <p className="feedback-msg feedback-error">{snowflakeError}</p>}
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderPostgresConfig = () => (
+    <div className="connector-steps">
+      <div className="connector-step">
+        <div className="step-badge">1</div>
+        <div className="step-content">
+          <p className="step-title">Host &amp; Database</p>
+          <div className="step-fields">
+            <div className="field-row">
+              <div className="field-group">
+                <label className="field-label">Host <span className="field-required">*</span></label>
+                <input
+                  className="field-input"
+                  type="text"
+                  value={postgresForm.host}
+                  onChange={(e) => handlePostgresField('host', e.target.value)}
+                  placeholder="db.example.com"
+                />
+              </div>
+              <div className="field-group">
+                <label className="field-label">Port</label>
+                <input
+                  className="field-input"
+                  type="number"
+                  value={postgresForm.port}
+                  onChange={(e) => handlePostgresField('port', e.target.value)}
+                  placeholder="5432"
+                />
+              </div>
+            </div>
+            <div className="field-row">
+              <div className="field-group">
+                <label className="field-label">Database <span className="field-required">*</span></label>
+                <input
+                  className="field-input"
+                  type="text"
+                  value={postgresForm.database}
+                  onChange={(e) => handlePostgresField('database', e.target.value)}
+                  placeholder="analytics"
+                />
+              </div>
+              <div className="field-group">
+                <label className="field-label">Schema</label>
+                <input
+                  className="field-input"
+                  type="text"
+                  value={postgresForm.schema}
+                  onChange={(e) => handlePostgresField('schema', e.target.value)}
+                  placeholder="public"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="connector-step">
+        <div className="step-badge">2</div>
+        <div className="step-content">
+          <p className="step-title">Credentials <span className="field-required">*</span></p>
+          <div className="step-fields">
+            <div className="field-group">
+              <label className="field-label">Username <span className="field-required">*</span></label>
+              <input
+                className="field-input"
+                type="text"
+                autoComplete="username"
+                value={postgresForm.username}
+                onChange={(e) => handlePostgresField('username', e.target.value)}
+                placeholder={postgresCredentialsStored ? 'Re-enter username to update' : 'postgres'}
+              />
+            </div>
+            <div className="field-group">
+              <label className="field-label">Password <span className="field-required">*</span></label>
+              <input
+                className="field-input"
+                type="password"
+                autoComplete="current-password"
+                value={postgresForm.password}
+                onChange={(e) => handlePostgresField('password', e.target.value)}
+                placeholder={postgresCredentialsStored ? 'Re-enter password to reconnect' : '••••••••'}
+              />
+            </div>
+            <label className="field-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={Boolean(postgresForm.ssl)}
+                onChange={(e) => handlePostgresField('ssl', e.target.checked)}
+              />
+              Require SSL
+            </label>
+          </div>
+          {postgresCredentialsStored && (
+            <p className="step-sub" style={{ marginTop: 8 }}>
+              Credentials are already stored encrypted. Re-enter them to test or update the connection.
+            </p>
+          )}
+        </div>
+      </div>
+
+      <div className="connector-step">
+        <div className="step-badge">3</div>
+        <div className="step-content">
+          <p className="step-title">Test &amp; Activate</p>
+          <p className="step-sub">Validate credentials before saving to ensure the connection works.</p>
+          <div className="step-actions">
+            <button
+              className="btn-secondary"
+              type="button"
+              onClick={handleTestPostgres}
+              disabled={testingPostgres || connectingPostgres}
+            >
+              {testingPostgres ? 'Testing…' : 'Test Connection'}
+            </button>
+            <button
+              className="btn-primary"
+              type="button"
+              onClick={handleConnectPostgres}
+              disabled={testingPostgres || connectingPostgres}
+            >
+              {connectingPostgres ? 'Connecting…' : 'Connect & Save'}
+            </button>
+          </div>
+          {postgresFeedback && <p className="feedback-msg feedback-success">{postgresFeedback}</p>}
+          {postgresError && <p className="feedback-msg feedback-error">{postgresError}</p>}
+        </div>
+      </div>
+    </div>
+  );
+
   const renderConnections = () => {
     const selected = WAREHOUSE_SOURCES.find((w) => w.id === selectedWarehouse);
     const warehouseGroup  = WAREHOUSE_SOURCES.filter((w) => w.category === 'Warehouse');
 
     return (
       <div className="connections-layout">
-        {/* ── Left: connected status + source picker ── */}
         <div className="connections-left">
           {bigQueryConnected && (
             <div className="conn-active-banner">
@@ -800,6 +1331,38 @@ function TenantDashboardPage() {
                 disabled={loadingBigQueryTables}
               >
                 {loadingBigQueryTables ? '…' : 'Load Tables'}
+              </button>
+            </div>
+          )}
+          {snowflakeConnected && (
+            <div className="conn-active-banner">
+              <div className="conn-dot connected" />
+              <div className="conn-active-text">
+                <span className="conn-active-label">Snowflake</span>
+                <span className="conn-active-sub">Connected</span>
+              </div>
+              <button
+                className="btn-load-tables"
+                onClick={handleLoadSnowflakeTables}
+                disabled={loadingSnowflakeTables}
+              >
+                {loadingSnowflakeTables ? '…' : 'Load Tables'}
+              </button>
+            </div>
+          )}
+          {postgresConnected && (
+            <div className="conn-active-banner">
+              <div className="conn-dot connected" />
+              <div className="conn-active-text">
+                <span className="conn-active-label">PostgreSQL</span>
+                <span className="conn-active-sub">Connected</span>
+              </div>
+              <button
+                className="btn-load-tables"
+                onClick={handleLoadPostgresTables}
+                disabled={loadingPostgresTables}
+              >
+                {loadingPostgresTables ? '…' : 'Load Tables'}
               </button>
             </div>
           )}
@@ -825,20 +1388,24 @@ function TenantDashboardPage() {
                 {bigQueryConnected && src.id === 'bigquery' && (
                   <span className="source-conn-dot" />
                 )}
+                {snowflakeConnected && src.id === 'snowflake' && (
+                  <span className="source-conn-dot" />
+                )}
+                {postgresConnected && src.id === 'postgresql' && (
+                  <span className="source-conn-dot" />
+                )}
                 {!src.available && <span className="source-soon">Soon</span>}
               </button>
             ))}
           </div>
-
         </div>
 
-        {/* ── Right: config panel ── */}
         <div className="connections-right">
           {selected ? (
             <div className="connector-panel">
               <div className="connector-panel-head">
                 <span
-                  className="connector-panel-icon"
+                  className="connector-mark"
                   style={{ background: selected.color + '20', color: selected.color, borderColor: selected.color + '40' }}
                 >
                   {selected.initials}
@@ -853,16 +1420,38 @@ function TenantDashboardPage() {
 
               {selected.available ? (
                 <>
-                  {renderBigQueryConfig()}
+                  {selected.id === 'bigquery' ? renderBigQueryConfig() : null}
+                  {selected.id === 'snowflake' ? renderSnowflakeConfig() : null}
+                  {selected.id === 'postgresql' ? renderPostgresConfig() : null}
                   <div className="security-note">
                     <span className="security-dot" />
                     Credentials are encrypted at rest and only used for approved tenant queries.
                   </div>
-                  {bigQueryTables.length > 0 && (
+                  {selected.id === 'bigquery' && bigQueryTables.length > 0 && (
                     <div className="tables-card" style={{ marginTop: '16px' }}>
                       <p className="tables-card-title">Discovered Tables ({bigQueryTables.length})</p>
                       <div className="tables-grid">
                         {bigQueryTables.map((t) => (
+                          <span key={t} className="table-chip">{t}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {selected.id === 'snowflake' && snowflakeTables.length > 0 && (
+                    <div className="tables-card" style={{ marginTop: '16px' }}>
+                      <p className="tables-card-title">Discovered Tables ({snowflakeTables.length})</p>
+                      <div className="tables-grid">
+                        {snowflakeTables.map((t) => (
+                          <span key={t} className="table-chip">{t}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {selected.id === 'postgresql' && postgresTables.length > 0 && (
+                    <div className="tables-card" style={{ marginTop: '16px' }}>
+                      <p className="tables-card-title">Discovered Tables ({postgresTables.length})</p>
+                      <div className="tables-grid">
+                        {postgresTables.map((t) => (
                           <span key={t} className="table-chip">{t}</span>
                         ))}
                       </div>
@@ -874,7 +1463,7 @@ function TenantDashboardPage() {
                   <span className="coming-soon-icon">⏳</span>
                   <p className="coming-soon-title">{selected.label} is coming soon</p>
                   <p className="coming-soon-sub">
-                    We're building native support for {selected.label}. BigQuery is currently the only supported warehouse.
+                    Native support for {selected.label} is not available yet. Use BigQuery, Snowflake, or PostgreSQL.
                   </p>
                   <button className="btn-secondary" onClick={() => setSelectedWarehouse('bigquery')}>
                     Use BigQuery instead
@@ -899,6 +1488,7 @@ function TenantDashboardPage() {
         <div>
           <p className="section-actions-desc">
             {catalogues.length} catalogue{catalogues.length !== 1 ? 's' : ''} for this workspace
+            {catalogueSourceLabel ? ` · Generate uses ${catalogueSourceLabel}` : ''}
           </p>
         </div>
         <div className="section-actions-right">
@@ -908,18 +1498,28 @@ function TenantDashboardPage() {
           <button
             className="btn-primary"
             onClick={handleGenerateCatalogue}
-            disabled={generatingCatalogue || !bigQueryConnected}
-            title={!bigQueryConnected ? 'Connect BigQuery first' : ''}
+            disabled={generatingCatalogue || !warehouseConnected}
+            title={!warehouseConnected
+              ? 'Connect a warehouse first'
+              : `Discover metadata from ${catalogueSourceLabel || 'connected warehouse'}`}
           >
             {generatingCatalogue ? 'Generating…' : '+ Generate Catalogue'}
           </button>
         </div>
       </div>
 
-      {!bigQueryConnected && (
+      {!warehouseConnected && (
         <div className="inline-notice">
-          <span>BigQuery is not connected.</span>
+          <span>No warehouse is connected.</span>
           <button className="btn-link" onClick={() => setActiveSection('connections')}>Connect now →</button>
+        </div>
+      )}
+      {warehouseConnected && connectedWarehouseLabels.length > 1 && !lastConnectedWarehouse && (
+        <div className="inline-notice">
+          <span>
+            Multiple warehouses are connected. Catalogue generation uses the most recently saved connector.
+            Re-save a warehouse to choose which one is active.
+          </span>
         </div>
       )}
 
@@ -932,7 +1532,7 @@ function TenantDashboardPage() {
         <div className="empty-state">
           <span className="empty-icon">▤</span>
           <p className="empty-title">No catalogues yet</p>
-          <p className="empty-sub">Generate your first catalogue from the connected BigQuery source.</p>
+          <p className="empty-sub">Generate your first catalogue from the connected warehouse.</p>
         </div>
       ) : (
         <div className="catalogue-grid">
@@ -1198,9 +1798,9 @@ function TenantDashboardPage() {
                 <div className="profile-detail"><span>Tenant ID</span><strong>{tenantId || '—'}</strong></div>
                 <div className="profile-detail"><span>User ID</span><strong>{tenantUserId || '—'}</strong></div>
                 <div className="profile-detail">
-                  <span>BigQuery</span>
-                  <strong className={bigQueryConnected ? 'text-success' : 'text-muted'}>
-                    {bigQueryConnected ? 'Connected' : 'Not connected'}
+                  <span>Warehouse</span>
+                  <strong className={warehouseConnected ? 'text-success' : 'text-muted'}>
+                    {warehouseConnected ? activeWarehouseLabel : 'Not connected'}
                   </strong>
                 </div>
                 <button className="profile-signout-btn" onClick={handleSignOut} type="button">
@@ -1220,9 +1820,9 @@ function TenantDashboardPage() {
             <p className="page-sub">{current.sub}</p>
           </div>
           <div className="topbar-right">
-            <div className={`conn-indicator ${bigQueryConnected ? 'connected' : ''}`}>
+            <div className={`conn-indicator ${warehouseConnected ? 'connected' : ''}`}>
               <span className="conn-indicator-dot" />
-              <span>{bigQueryConnected ? 'Connected' : 'No connection'}</span>
+              <span>{warehouseConnected ? activeWarehouseLabel : 'No connection'}</span>
             </div>
           </div>
         </header>

@@ -13,9 +13,7 @@ import './App.css';
 function RequireAuth({ children, adminOnly = false }) {
   const session = getSession();
   if (!session) return <Navigate to="/signin" replace />;
-  if (adminOnly && !isAdminRole(session.role)) {
-    return <Navigate to="/user/dashboard" replace />;
-  }
+  if (adminOnly && !isAdminRole(session.role)) return <Navigate to="/user/dashboard" replace />;
   return children;
 }
 
@@ -27,30 +25,9 @@ function App() {
       <Route path="/activate-invite" element={<ActivateInvitePage />} />
       <Route path="/accept-invite" element={<AcceptInvitePage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
-      <Route
-        path="/tenant/dashboard"
-        element={
-          <RequireAuth adminOnly>
-            <TenantDashboardPage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/tenant/catalogue/:catalogueId"
-        element={
-          <RequireAuth adminOnly>
-            <TenantCataloguePage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/user/dashboard"
-        element={
-          <RequireAuth>
-            <UserDashboardPage />
-          </RequireAuth>
-        }
-      />
+      <Route path="/tenant/dashboard" element={<RequireAuth adminOnly><TenantDashboardPage /></RequireAuth>} />
+      <Route path="/tenant/catalogue/:catalogueId" element={<RequireAuth adminOnly><TenantCataloguePage /></RequireAuth>} />
+      <Route path="/user/dashboard" element={<RequireAuth><UserDashboardPage /></RequireAuth>} />
       <Route path="/dashboard" element={<Navigate to="/tenant/dashboard" replace />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

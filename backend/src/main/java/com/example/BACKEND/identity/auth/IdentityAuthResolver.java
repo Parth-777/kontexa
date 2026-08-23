@@ -52,7 +52,11 @@ public class IdentityAuthResolver {
         Identity identity = resolved.identity();
 
         if (!"ACTIVE".equals(identity.status())) return Optional.empty();
-        if (!passwords.matches(password, identity.passwordHash())) return Optional.empty();
+        PasswordService.LoginPasswordCheck check = passwords.check(password, identity.passwordHash());
+        if (!check.matched()) return Optional.empty();
+        if (check.requiresRehash()) {
+            repo.updatePasswordHash(identity.id(), passwords.hash(password));
+        }
 
         repo.updateLastLogin(identity.id());
 

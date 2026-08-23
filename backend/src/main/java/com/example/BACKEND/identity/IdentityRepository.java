@@ -2,6 +2,7 @@ package com.example.BACKEND.identity;
 
 import com.example.BACKEND.identity.WorkspaceIdentityDomain.*;
 import com.example.BACKEND.identity.auth.IdentityAuthResolver.ResolvedLogin;
+import com.example.BACKEND.identity.connector.ConnectorCredentialCipher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -29,9 +30,11 @@ public class IdentityRepository {
     private static final Logger log = LoggerFactory.getLogger(IdentityRepository.class);
 
     private final JdbcTemplate jdbc;
+    private final ConnectorCredentialCipher credentialCipher;
 
-    public IdentityRepository(JdbcTemplate jdbc) {
+    public IdentityRepository(JdbcTemplate jdbc, ConnectorCredentialCipher credentialCipher) {
         this.jdbc = jdbc;
+        this.credentialCipher = credentialCipher;
     }
 
     // ── Workspace ─────────────────────────────────────────────────────────────
@@ -121,6 +124,10 @@ public class IdentityRepository {
                 SET display_name = ?, password_hash = ?, status = 'ACTIVE'
                 WHERE id = ?
                 """, displayName, passwordHash, identityId);
+    }
+
+    public void updatePasswordHash(UUID identityId, String passwordHash) {
+        jdbc.update("UPDATE identities SET password_hash = ? WHERE id = ?", passwordHash, identityId);
     }
 
     public void updateIdentityStatus(UUID identityId, String status) {
@@ -331,10 +338,12 @@ public class IdentityRepository {
 
     /**
      * Creates or updates a connector for (workspace_id, warehouse_type).
+     * Credentials are sealed with AES-256-GCM before persistence (plaintext never stored when key is set).
      * Idempotent — safe to call multiple times.
      */
     public UUID upsertConnector(UUID workspaceId, String warehouseType, String credentialsJson) {
         UUID id = UUID.randomUUID();
+        String sealed = credentialCipher.seal(credentialsJson);
         jdbc.update("""
                 INSERT INTO workspace_connectors
                     (id, workspace_id, warehouse_type, encrypted_credentials, status)
@@ -343,7 +352,7 @@ public class IdentityRepository {
                     SET encrypted_credentials = EXCLUDED.encrypted_credentials,
                         status     = 'CONNECTED',
                         updated_at = NOW()
-                """, id, workspaceId, warehouseType, credentialsJson);
+                """, id, workspaceId, warehouseType, sealed);
         List<UUID> existing = jdbc.query(
                 "SELECT id FROM workspace_connectors WHERE workspace_id = ? AND warehouse_type = ? LIMIT 1",
                 (rs, n) -> UUID.fromString(rs.getString("id")),
@@ -351,16 +360,55 @@ public class IdentityRepository {
         return existing.isEmpty() ? id : existing.getFirst();
     }
 
+    /**
+     * Returns decrypted connector JSON for in-memory use (newest CONNECTED row of any type).
+     * Prefer {@link #findConnectorCredentials(UUID, String)} for warehouse-specific lookups.
+     */
     public Optional<String> findConnectorCredentials(UUID workspaceId) {
-        List<String> rows = jdbc.query(
-                """
-                SELECT encrypted_credentials FROM workspace_connectors
-                WHERE workspace_id = ? AND status = 'CONNECTED'
-                ORDER BY updated_at DESC LIMIT 1
-                """,
-                (rs, n) -> rs.getString("encrypted_credentials"),
-                workspaceId);
-        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.getFirst());
+        return findConnectorCredentials(workspaceId, null);
+    }
+
+    /**
+     * Returns decrypted connector JSON for in-memory use.
+     * When {@code warehouseType} is set (e.g. {@code BIGQUERY}), only that connector row is loaded.
+     * Legacy plaintext rows are accepted once and rewritten as ciphertext when encryption is enabled.
+     */
+    public Optional<String> findConnectorCredentials(UUID workspaceId, String warehouseType) {
+        List<Map<String, Object>> rows;
+        if (warehouseType != null && !warehouseType.isBlank()) {
+            rows = jdbc.queryForList("""
+                    SELECT id, encrypted_credentials FROM workspace_connectors
+                    WHERE workspace_id = ? AND warehouse_type = ? AND status = 'CONNECTED'
+                    ORDER BY updated_at DESC LIMIT 1
+                    """, workspaceId, warehouseType.trim().toUpperCase());
+        } else {
+            rows = jdbc.queryForList("""
+                    SELECT id, encrypted_credentials FROM workspace_connectors
+                    WHERE workspace_id = ? AND status = 'CONNECTED'
+                    ORDER BY updated_at DESC LIMIT 1
+                    """, workspaceId);
+        }
+        if (rows.isEmpty()) return Optional.empty();
+
+        Map<String, Object> row = rows.getFirst();
+        UUID rowId = UUID.fromString(String.valueOf(row.get("id")));
+        String stored = row.get("encrypted_credentials") != null
+                ? String.valueOf(row.get("encrypted_credentials"))
+                : null;
+        if (stored == null || stored.isBlank()) return Optional.empty();
+
+        ConnectorCredentialCipher.UnsealResult unsealed = credentialCipher.unseal(stored);
+        if (unsealed.wasLegacyPlaintext() && credentialCipher.isEnabled()) {
+            String resealed = credentialCipher.seal(unsealed.plaintext());
+            jdbc.update("""
+                    UPDATE workspace_connectors
+                    SET encrypted_credentials = ?, updated_at = NOW()
+                    WHERE id = ?
+                    """, resealed, rowId);
+            log.info("[identity-repo] migrated connector credentials to ciphertext workspaceId={} rowId={}",
+                    workspaceId, rowId);
+        }
+        return Optional.of(unsealed.plaintext());
     }
 
     // ── Migration Log ─────────────────────────────────────────────────────────

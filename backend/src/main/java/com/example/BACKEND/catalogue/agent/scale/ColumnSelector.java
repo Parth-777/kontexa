@@ -60,6 +60,8 @@ public final class ColumnSelector {
         List<Scored> scored = new ArrayList<>();
         for (String col : stringCols) {
             if (isIdLike(col)) continue;
+            // Deep nests under REPEATED RECORD parents need UNNEST — skip for simple GROUP BY discovery.
+            if (col.split("\\.").length > 2) continue;
             int score = dimensionScore(col, tier);
             if (score > 0) scored.add(new Scored(col, score));
         }
@@ -82,6 +84,8 @@ public final class ColumnSelector {
         for (String kw : METRIC_KEYWORDS) {
             if (lower.contains(kw)) score += 10;
         }
+        // Columns already classified numeric remain eligible even without keyword/enrichment hits.
+        if (score == 0) score = 5;
         return score;
     }
 
@@ -91,6 +95,11 @@ public final class ColumnSelector {
         for (String kw : DIMENSION_KEYWORDS) {
             if (lower.contains(kw)) score += 15;
         }
+        // Prefer shallow leaf paths — deep nests often require UNNEST and fail simple GROUP BY.
+        int depth = col.split("\\.").length - 1;
+        if (depth == 0) score += 20;
+        else if (depth == 1) score += 8;
+        else score -= 10;
         if (tier == ScaleTier.SMALL && score == 0) score = 1;
         return score;
     }

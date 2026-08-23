@@ -85,6 +85,7 @@ public class CatalogueStorageService {
         tableEntity.setTableName(tableInfo.getTableName());
         tableEntity.setTableSchema(tableInfo.getTableSchema() != null
                 ? tableInfo.getTableSchema() : "public");
+        tableEntity.setDescription(tableInfo.getDescription());
         tableEntity.setRowCount(tableInfo.getRowCount());
 
         for (ColumnInfo col : tableInfo.getColumns()) {
@@ -120,6 +121,9 @@ public class CatalogueStorageService {
         entity.setBusinessMeaning(col.getBusinessMeaning());
         entity.setAggregationMethod(col.getAggregationMethod());
         entity.setConfidence(col.getConfidence());
+        entity.setDisplayUnit(col.getDisplayUnit());
+        entity.setScaleToCanonical(col.getScaleToCanonical());
+        entity.setGrainLabel(col.getGrainLabel());
 
         return entity;
     }

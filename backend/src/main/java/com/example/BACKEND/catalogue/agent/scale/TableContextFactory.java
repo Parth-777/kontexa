@@ -1,6 +1,7 @@
 package com.example.BACKEND.catalogue.agent.scale;
 
 import com.example.BACKEND.catalogue.agent.EnrichedColInfo;
+import com.example.BACKEND.catalogue.agent.EnrichedColInfoFactory;
 import com.example.BACKEND.catalogue.agent.KpiDetectorService;
 import com.example.BACKEND.catalogue.agent.TableContext;
 import com.example.BACKEND.tenant.TenantCloudConnectionService;
@@ -92,13 +93,7 @@ public class TableContextFactory {
         for (JsonNode col : tableNode.path("columns")) {
             String colName = col.path("columnName").asText("");
             if (colName.isBlank()) continue;
-            map.put(colName.toLowerCase(), new EnrichedColInfo(
-                    col.path("aggregationMethod").asText("NONE"),
-                    col.path("comparisonPeriod").asText("NONE"),
-                    col.path("dateGranularity").asText("N/A"),
-                    col.path("businessMeaning").asText(""),
-                    col.path("maxValue").asText("")
-            ));
+            map.put(colName.toLowerCase(), EnrichedColInfoFactory.fromColumnNode(col));
         }
         return map;
     }

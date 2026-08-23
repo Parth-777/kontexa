@@ -59,26 +59,26 @@ public final class ExecutiveVoice {
         return String.format(Locale.US, "%.1f%%", abs);
     }
 
-    /** Compact value for highlights and briefs. */
+    /**
+     * Compact numeric display without inventing currency units.
+     * Prefer {@link MetricDisplayFormatter#formatMetric} when catalogue semantics are known.
+     */
     public static String formatValue(Object v) {
-        if (v == null) return "";
-        double n;
-        if (v instanceof Number num) {
-            n = num.doubleValue();
-        } else {
-            try {
-                n = Double.parseDouble(v.toString());
-            } catch (Exception e) {
-                return v.toString();
-            }
-        }
-        double abs = Math.abs(n);
-        if (abs >= 1_000_000_000) return String.format(Locale.US, "$%.2fB", n / 1_000_000_000);
-        if (abs >= 1_000_000) return String.format(Locale.US, "$%.1fM", n / 1_000_000);
-        if (abs >= 10_000) return String.format(Locale.US, "$%.0fK", n / 1_000);
-        if (abs >= 100) return String.format(Locale.US, "%.0f", n);
-        if (abs >= 1) return String.format(Locale.US, "%.1f", n);
-        return String.format(Locale.US, "%.2f", n);
+        return MetricDisplayFormatter.formatMetric(v, MetricSemantics.unknown());
+    }
+
+    /** Format using catalogue metric semantics (scale + display unit). */
+    public static String formatMetric(Object v, MetricSemantics semantics) {
+        return MetricDisplayFormatter.formatMetric(v, semantics);
+    }
+
+    /** Row/entity counts — never currency-styled. */
+    public static String formatCount(Object v) {
+        return MetricDisplayFormatter.formatCount(v);
+    }
+
+    public static String formatCount(Object v, String grainLabel) {
+        return MetricDisplayFormatter.formatCount(v, grainLabel);
     }
 
     private static String capitalizeWord(String w) {

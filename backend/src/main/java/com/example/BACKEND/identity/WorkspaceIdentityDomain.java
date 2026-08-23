@@ -48,7 +48,7 @@ public final class WorkspaceIdentityDomain {
             String email,
             String displayName,
             String authProvider,   // LOCAL_PASSWORD | OKTA | AZURE_AD | SAML | GOOGLE_WORKSPACE
-            String passwordHash,   // plain-text during transition; BCrypt-ready by column name
+            String passwordHash,   // BCrypt hash (legacy plaintext upgraded on next login)
             String status,         // ACTIVE | SUSPENDED | INVITED | REVOKED
             LocalDateTime lastLoginAt,
             LocalDateTime createdAt,

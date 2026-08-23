@@ -220,13 +220,13 @@ public class InsightCandidateExpander {
                 String minD = str(row.get("min_date"));
                 String maxD = str(row.get("max_date"));
                 String table = cd.label().replace("PROFILE:", "").replace("summary", "").trim();
-                String claim = "Analysis covers " + ExecutiveVoice.formatValue(rows) + " records"
+                String claim = "Analysis covers " + ExecutiveVoice.formatCount(rows) + " records"
                         + (maxD.isBlank() ? "" : " through " + maxD);
                 add(out, seen, new InsightCandidate(
                         claim, InsightLens.EFFICIENCY, table, 12,
                         "INFO", "LOW",
                         List.of(cd.label()),
-                        highlights(ExecutiveVoice.formatValue(rows), minD.isBlank() ? "—" : minD + " → " + maxD, table),
+                        highlights(ExecutiveVoice.formatCount(rows), minD.isBlank() ? "—" : minD + " → " + maxD, table),
                         List.of(), InsightLens.EFFICIENCY.defaultOwner(), null));
             }
         }

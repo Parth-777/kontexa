@@ -371,6 +371,23 @@ public final class GptStructuredPlannerPrompt {
                 For time_series set time_column and time_grain (DAY|WEEK|MONTH|QUARTER|YEAR).
                 For rank/top_n/bottom_n/share/concentration set dimension, measure, and optional limit.
                 For metric_by_dimension set dimension + measure; do not put contrast filters into focal_slice/baseline_slice unless both sides are required in one SQL.
+                
+                DIMENSION REQUIRED (fail-closed contract)
+                For these evidence_requests.kind values, dimension is REQUIRED and must be a
+                non-null catalogue leaf path (not a parent RECORD/STRUCT/OBJECT container):
+                - metric_by_dimension
+                - distribution
+                - rank
+                - top_n
+                - bottom_n
+                - share
+                - concentration
+                Never emit those kinds with dimension=null or dimension omitted.
+                If no suitable catalogue leaf dimension exists for a needed grouping request,
+                do not emit that kind; declare the gap in insufficiency.unknowns / blocked_reasons.
+                Kinds that do not require a grouping dimension (e.g. slice_metric, time_series,
+                correlation with explicit x/y) keep their existing field rules.
+                
                 Prefer empty slice constraints over inventing IS NOT NULL filters.
                 Prefer catalogue columns that exist; for location/region questions use the best available location dimension (for example PULocationID when region is absent). Do not invent customer_id when the catalogue has no customer identifier — use the closest entity dimension present, or lower confidence.
                 

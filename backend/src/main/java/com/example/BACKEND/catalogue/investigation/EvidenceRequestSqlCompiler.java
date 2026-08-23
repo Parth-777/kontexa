@@ -1,7 +1,10 @@
 package com.example.BACKEND.catalogue.investigation;
 
 import com.example.BACKEND.catalogue.decision.contracts.DecisionModels.QuerySpec;
+import com.example.BACKEND.catalogue.decision.transforms.BigQueryDialect;
+import com.example.BACKEND.catalogue.decision.transforms.WarehouseDialect;
 import com.example.BACKEND.catalogue.schema.SqlFieldReferenceEmitter;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -33,9 +36,16 @@ public class EvidenceRequestSqlCompiler {
     );
 
     private final SlicePredicateBuilder predicateBuilder;
+    private final WarehouseDialect dialect;
 
     public EvidenceRequestSqlCompiler(SlicePredicateBuilder predicateBuilder) {
+        this(predicateBuilder, new BigQueryDialect());
+    }
+
+    @Autowired
+    public EvidenceRequestSqlCompiler(SlicePredicateBuilder predicateBuilder, WarehouseDialect dialect) {
         this.predicateBuilder = predicateBuilder;
+        this.dialect = dialect != null ? dialect : new BigQueryDialect();
     }
 
     public CompiledProgram compile(InvestigationPlan plan, String tableRef) {
@@ -237,7 +247,7 @@ public class EvidenceRequestSqlCompiler {
         String valueExpr = metricExpr(measure, predicate);
         String sql = "SELECT " + dimension + " AS member,"
                 + valueExpr + " AS value,"
-                + "SAFE_DIVIDE(" + valueExpr + ", SUM(" + valueExpr + ") OVER()) AS share"
+                + dialect.safeDivide(valueExpr, "SUM(" + valueExpr + ") OVER()") + " AS share"
                 + " FROM " + tableRef
                 + " WHERE (" + predicate + ")"
                 + " GROUP BY " + dimension
@@ -263,7 +273,7 @@ public class EvidenceRequestSqlCompiler {
         String sql = "WITH ranked AS ("
                 + "SELECT " + dimension + " AS member,"
                 + valueExpr + " AS value,"
-                + "SAFE_DIVIDE(" + valueExpr + ", SUM(" + valueExpr + ") OVER()) AS share"
+                + dialect.safeDivide(valueExpr, "SUM(" + valueExpr + ") OVER()") + " AS share"
                 + " FROM " + tableRef
                 + " WHERE (" + predicate + ")"
                 + " GROUP BY " + dimension
@@ -301,7 +311,7 @@ public class EvidenceRequestSqlCompiler {
                 request.slice() != null ? request.slice() : new InvestigationObjective.Slice(List.of()),
                 scopeFilters, tableRef, measure);
         String predicate = built.sqlPredicate();
-        String periodExpr = "TIMESTAMP_TRUNC(" + timeColumn + ", " + truncUnit + ")";
+        String periodExpr = dialect.timestampTrunc(timeColumn, truncUnit);
         String sql = "SELECT " + periodExpr + " AS period,"
                 + metricExpr(measure, predicate) + " AS value"
                 + " FROM " + tableRef
@@ -368,11 +378,12 @@ public class EvidenceRequestSqlCompiler {
                 ? measure.aggregation() : InvestigationObjective.AGG_SUM;
         String col = sqlRef(measure != null ? measure.column() : null);
         if (InvestigationObjective.AGG_COUNT.equalsIgnoreCase(agg)) {
-            return "COUNTIF(" + cond + ")";
+            return dialect.countIf(cond);
         }
         if (InvestigationObjective.AGG_AVG.equalsIgnoreCase(agg)) {
-            return "SAFE_DIVIDE(SUM(CASE WHEN " + cond + " THEN " + col
-                    + " ELSE 0 END), COUNTIF(" + cond + "))";
+            return dialect.safeDivide(
+                    "SUM(CASE WHEN " + cond + " THEN " + col + " ELSE 0 END)",
+                    dialect.countIf(cond));
         }
         return "SUM(CASE WHEN " + cond + " THEN " + col + " ELSE 0 END)";
     }

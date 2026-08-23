@@ -1,8 +1,10 @@
 package com.example.BACKEND.tenant;
 
+import com.example.BACKEND.identity.auth.AuthorizationService;
 import com.example.BACKEND.identity.connector.WorkspaceConnectorService;
 import com.example.BACKEND.tenancy.TenantContext;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.servlet.http.HttpServletRequest;
@@ -10,6 +12,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -21,27 +24,33 @@ public class TenantAuthController {
     private final TenantAuthService tenantAuthService;
     private final BigQueryConnectorService bigQueryConnectorService;
     private final SnowflakeConnectorService snowflakeConnectorService;
+    private final PostgresConnectorService postgresConnectorService;
     private final ObjectMapper objectMapper;
     private final TenantContextResolver tenantContextResolver;
     private final TenantCloudConnectionService cloudConnectionService;
     private final WorkspaceConnectorService workspaceConnectorService;
+    private final AuthorizationService authorization;
 
     public TenantAuthController(
             TenantAuthService tenantAuthService,
             BigQueryConnectorService bigQueryConnectorService,
             SnowflakeConnectorService snowflakeConnectorService,
+            PostgresConnectorService postgresConnectorService,
             ObjectMapper objectMapper,
             TenantContextResolver tenantContextResolver,
             TenantCloudConnectionService cloudConnectionService,
-            WorkspaceConnectorService workspaceConnectorService
+            WorkspaceConnectorService workspaceConnectorService,
+            AuthorizationService authorization
     ) {
         this.tenantAuthService = tenantAuthService;
         this.bigQueryConnectorService = bigQueryConnectorService;
         this.snowflakeConnectorService = snowflakeConnectorService;
+        this.postgresConnectorService = postgresConnectorService;
         this.objectMapper = objectMapper;
         this.tenantContextResolver = tenantContextResolver;
         this.cloudConnectionService = cloudConnectionService;
         this.workspaceConnectorService = workspaceConnectorService;
+        this.authorization = authorization;
     }
 
     @PostMapping("/login")
@@ -67,6 +76,7 @@ public class TenantAuthController {
 
     @GetMapping("/cloud-link")
     public ResponseEntity<?> getCloudLink(@RequestParam(required = false) String tenantId) {
+        authorization.requireAdmin();
         TenantContext ctx = tenantContextResolver.resolveContext(null, tenantId);
         try {
             return cloudConnectionService.getRawConfig(ctx.tenantId())
@@ -89,6 +99,7 @@ public class TenantAuthController {
             @RequestBody Map<String, String> body,
             HttpServletRequest request
     ) {
+        authorization.requireAdmin();
         TenantContext ctx = tenantContextResolver.resolveContext(null, body);
         String cloudDbLink = body.get("cloudDbLink");
 
@@ -124,6 +135,7 @@ public class TenantAuthController {
 
     @PostMapping("/bigquery/test-connection")
     public ResponseEntity<?> testBigQueryConnection(@RequestBody Map<String, Object> body) {
+        authorization.requireAdmin();
         try {
             BigQueryConnectorService.BigQueryTestResult result = bigQueryConnectorService.testConnection(
                     getAsString(body, "projectId"),
@@ -151,6 +163,7 @@ public class TenantAuthController {
             @RequestBody Map<String, Object> body,
             HttpServletRequest request
     ) {
+        authorization.requireAdmin();
         TenantContext ctx = tenantContextResolver.resolveContext(null, body);
 
         try {
@@ -173,6 +186,17 @@ public class TenantAuthController {
                     ctx.tenantId(), "BIGQUERY", configJson,
                     request.getRemoteAddr(), request.getHeader("User-Agent"));
 
+            // Verify warehouse path uses the same persisted credentials (not request-body only).
+            var persisted = cloudConnectionService.getBigQueryConfig(ctx.tenantId())
+                    .orElseThrow(() -> new IllegalStateException(
+                            "BigQuery credentials were saved but could not be reloaded for this workspace."));
+            bigQueryConnectorService.testConnection(
+                    persisted.projectId(),
+                    persisted.serviceAccountJson(),
+                    persisted.location(),
+                    persisted.dataset()
+            );
+
             return ResponseEntity.ok(Map.of(
                     "message", "BigQuery connection verified and saved",
                     "tenantId", ctx.legacyTenantKey(),
@@ -193,10 +217,11 @@ public class TenantAuthController {
 
     @GetMapping("/bigquery/config")
     public ResponseEntity<?> getBigQueryConfig(@RequestParam(required = false) String tenantId) {
+        authorization.requireAdmin();
         TenantContext ctx = tenantContextResolver.resolveContext(null, tenantId);
         try {
-            return cloudConnectionService.getRawConfig(ctx.tenantId())
-                    .or(() -> cloudConnectionService.getRawConfigBySlug(ctx.legacyTenantKey()))
+            return cloudConnectionService.getRawConfig(ctx.tenantId(), "BIGQUERY")
+                    .or(() -> cloudConnectionService.getRawConfigBySlug(ctx.legacyTenantKey(), "BIGQUERY"))
                     .<ResponseEntity<?>>map(this::toBigQueryConfigResponse)
                     .orElseGet(() -> ResponseEntity.ok(Map.of(
                             "connected", false,
@@ -212,8 +237,8 @@ public class TenantAuthController {
     public ResponseEntity<?> listBigQueryTables(@RequestParam(required = false) String tenantId) {
         TenantContext ctx = tenantContextResolver.resolveContext(null, tenantId);
         try {
-            Optional<String> rawConfigOpt = cloudConnectionService.getRawConfig(ctx.tenantId())
-                    .or(() -> cloudConnectionService.getRawConfigBySlug(ctx.legacyTenantKey()));
+            Optional<String> rawConfigOpt = cloudConnectionService.getRawConfig(ctx.tenantId(), "BIGQUERY")
+                    .or(() -> cloudConnectionService.getRawConfigBySlug(ctx.legacyTenantKey(), "BIGQUERY"));
             if (rawConfigOpt.isEmpty() || rawConfigOpt.get().isBlank()) {
                 return ResponseEntity.status(HttpStatus.NOT_FOUND)
                         .body(Map.of("error", "No BigQuery connector configured for this tenant"));
@@ -246,6 +271,7 @@ public class TenantAuthController {
 
     @PostMapping("/snowflake/test-connection")
     public ResponseEntity<?> testSnowflakeConnection(@RequestBody Map<String, Object> body) {
+        authorization.requireAdmin();
         try {
             SnowflakeConnectorService.SnowflakeTestResult result = snowflakeConnectorService.testConnection(
                     getAsString(body, "account"),
@@ -275,6 +301,7 @@ public class TenantAuthController {
             @RequestBody Map<String, Object> body,
             HttpServletRequest request
     ) {
+        authorization.requireAdmin();
         TenantContext ctx = tenantContextResolver.resolveContext(null, body);
         try {
             SnowflakeConnectorService.SnowflakeTestResult result = snowflakeConnectorService.testConnection(
@@ -318,10 +345,11 @@ public class TenantAuthController {
 
     @GetMapping("/snowflake/config")
     public ResponseEntity<?> getSnowflakeConfig(@RequestParam(required = false) String tenantId) {
+        authorization.requireAdmin();
         TenantContext ctx = tenantContextResolver.resolveContext(null, tenantId);
         try {
-            return cloudConnectionService.getRawConfig(ctx.tenantId())
-                    .or(() -> cloudConnectionService.getRawConfigBySlug(ctx.legacyTenantKey()))
+            return cloudConnectionService.getRawConfig(ctx.tenantId(), "SNOWFLAKE")
+                    .or(() -> cloudConnectionService.getRawConfigBySlug(ctx.legacyTenantKey(), "SNOWFLAKE"))
                     .<ResponseEntity<?>>map(this::toSnowflakeConfigResponse)
                     .orElseGet(() -> ResponseEntity.ok(Map.of("connected", false, "provider", "snowflake")));
         } catch (IllegalStateException ex) {
@@ -333,8 +361,8 @@ public class TenantAuthController {
     public ResponseEntity<?> listSnowflakeTables(@RequestParam(required = false) String tenantId) {
         TenantContext ctx = tenantContextResolver.resolveContext(null, tenantId);
         try {
-            Optional<String> rawConfigOpt = cloudConnectionService.getRawConfig(ctx.tenantId())
-                    .or(() -> cloudConnectionService.getRawConfigBySlug(ctx.legacyTenantKey()));
+            Optional<String> rawConfigOpt = cloudConnectionService.getRawConfig(ctx.tenantId(), "SNOWFLAKE")
+                    .or(() -> cloudConnectionService.getRawConfigBySlug(ctx.legacyTenantKey(), "SNOWFLAKE"));
             if (rawConfigOpt.isEmpty() || rawConfigOpt.get().isBlank()) {
                 return ResponseEntity.status(HttpStatus.NOT_FOUND)
                         .body(Map.of("error", "No Snowflake connector configured for this tenant"));
@@ -352,6 +380,147 @@ public class TenantAuthController {
                     "schema",      cfg.schema(),
                     "tables",      tables,
                     "tableCount",  tables.size()
+            ));
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
+        } catch (RuntimeException ex) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", ex.getMessage()));
+        }
+    }
+
+    // ── PostgreSQL connector endpoints ────────────────────────────────────────
+
+    @PostMapping("/postgres/test-connection")
+    public ResponseEntity<?> testPostgresConnection(@RequestBody Map<String, Object> body) {
+        authorization.requireAdmin();
+        try {
+            PostgresConnectorService.PostgresTestResult result = postgresConnectorService.testConnection(
+                    getAsString(body, "host"),
+                    getAsInteger(body, "port"),
+                    getAsString(body, "database"),
+                    getAsString(body, "schema"),
+                    getAsString(body, "username"),
+                    getAsString(body, "password"),
+                    getAsBoolean(body, "ssl", false)
+            );
+            return ResponseEntity.ok(Map.of(
+                    "connected", true,
+                    "connectionLink", result.connectionLink(),
+                    "host", result.host(),
+                    "port", result.port(),
+                    "database", result.database(),
+                    "schema", result.schema(),
+                    "ssl", result.ssl()
+            ));
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
+        } catch (RuntimeException ex) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", ex.getMessage()));
+        }
+    }
+
+    @PostMapping("/postgres/connect")
+    public ResponseEntity<?> connectPostgres(
+            @RequestBody Map<String, Object> body,
+            HttpServletRequest request
+    ) {
+        authorization.requireAdmin();
+        TenantContext ctx = tenantContextResolver.resolveContext(null, body);
+        try {
+            PostgresConnectorService.PostgresTestResult result = postgresConnectorService.testConnection(
+                    getAsString(body, "host"),
+                    getAsInteger(body, "port"),
+                    getAsString(body, "database"),
+                    getAsString(body, "schema"),
+                    getAsString(body, "username"),
+                    getAsString(body, "password"),
+                    getAsBoolean(body, "ssl", false)
+            );
+            String configJson = buildPostgresConfigJson(
+                    result.host(),
+                    result.port(),
+                    result.database(),
+                    result.schema(),
+                    getAsString(body, "username"),
+                    getAsString(body, "password"),
+                    result.ssl(),
+                    result.connectionLink()
+            );
+            cloudConnectionService.saveRawConfig(
+                    ctx.tenantId(), "POSTGRESQL", configJson,
+                    request.getRemoteAddr(), request.getHeader("User-Agent"));
+
+            var persisted = cloudConnectionService.getPostgresConfig(ctx.tenantId())
+                    .orElseThrow(() -> new IllegalStateException(
+                            "PostgreSQL credentials were saved but could not be reloaded for this workspace."));
+            postgresConnectorService.testConnection(
+                    persisted.host(),
+                    persisted.port(),
+                    persisted.database(),
+                    persisted.schema(),
+                    persisted.username(),
+                    persisted.password(),
+                    persisted.ssl()
+            );
+
+            Map<String, Object> saved = new LinkedHashMap<>();
+            saved.put("message", "PostgreSQL connection verified and saved");
+            saved.put("tenantId", ctx.legacyTenantKey());
+            saved.put("workspaceId", ctx.tenantId().toString());
+            saved.put("provider", "postgresql");
+            saved.put("host", result.host());
+            saved.put("port", result.port());
+            saved.put("database", result.database());
+            saved.put("schema", result.schema());
+            saved.put("ssl", result.ssl());
+            saved.put("connectionLink", result.connectionLink());
+            saved.put("credentialsStored", true);
+            return ResponseEntity.ok(saved);
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
+        } catch (RuntimeException ex) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", ex.getMessage()));
+        }
+    }
+
+    @GetMapping("/postgres/config")
+    public ResponseEntity<?> getPostgresConfig(@RequestParam(required = false) String tenantId) {
+        authorization.requireAdmin();
+        TenantContext ctx = tenantContextResolver.resolveContext(null, tenantId);
+        try {
+            return cloudConnectionService.getRawConfig(ctx.tenantId(), "POSTGRESQL")
+                    .or(() -> cloudConnectionService.getRawConfigBySlug(ctx.legacyTenantKey(), "POSTGRESQL"))
+                    .<ResponseEntity<?>>map(this::toPostgresConfigResponse)
+                    .orElseGet(() -> ResponseEntity.ok(Map.of("connected", false, "provider", "postgresql")));
+        } catch (IllegalStateException ex) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of("error", ex.getMessage()));
+        }
+    }
+
+    @GetMapping("/postgres/tables")
+    public ResponseEntity<?> listPostgresTables(@RequestParam(required = false) String tenantId) {
+        TenantContext ctx = tenantContextResolver.resolveContext(null, tenantId);
+        try {
+            Optional<String> rawConfigOpt = cloudConnectionService.getRawConfig(ctx.tenantId(), "POSTGRESQL")
+                    .or(() -> cloudConnectionService.getRawConfigBySlug(ctx.legacyTenantKey(), "POSTGRESQL"));
+            if (rawConfigOpt.isEmpty() || rawConfigOpt.get().isBlank()) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(Map.of("error", "No PostgreSQL connector configured for this tenant"));
+            }
+            StoredPostgresConfig cfg = parseStoredPostgresConfig(rawConfigOpt.get());
+            List<String> tables = postgresConnectorService.listTables(
+                    cfg.host(), cfg.port(), cfg.database(), cfg.schema(),
+                    cfg.username(), cfg.password(), cfg.ssl()
+            );
+            return ResponseEntity.ok(Map.of(
+                    "connected", true,
+                    "provider", "postgresql",
+                    "host", cfg.host(),
+                    "port", cfg.port(),
+                    "database", cfg.database(),
+                    "schema", cfg.schema(),
+                    "tables", tables,
+                    "tableCount", tables.size()
             ));
         } catch (IllegalArgumentException ex) {
             return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
@@ -440,12 +609,144 @@ public class TenantAuthController {
             String account, String warehouse, String database, String schema, String username, String password
     ) {}
 
+    // ── PostgreSQL helpers ────────────────────────────────────────────────────
+
+    private String buildPostgresConfigJson(
+            String host, int port, String database, String schema,
+            String username, String password, boolean ssl, String connectionLink
+    ) {
+        try {
+            ObjectNode root = objectMapper.createObjectNode();
+            root.put("provider", "postgresql");
+            root.put("host", host == null ? "" : host);
+            root.put("port", port);
+            root.put("database", database == null ? "" : database);
+            root.put("schema", schema == null || schema.isBlank()
+                    ? PostgresConnectorService.DEFAULT_SCHEMA : schema);
+            root.put("username", username == null ? "" : username);
+            root.put("password", password == null ? "" : password);
+            root.put("ssl", ssl);
+            root.put("connectionLink", connectionLink == null ? "" : connectionLink);
+            return objectMapper.writeValueAsString(root);
+        } catch (JsonProcessingException ex) {
+            throw new RuntimeException("Failed to serialize PostgreSQL config", ex);
+        }
+    }
+
+    private ResponseEntity<?> toPostgresConfigResponse(String rawCloudConfig) {
+        if (rawCloudConfig == null || rawCloudConfig.isBlank()) {
+            return ResponseEntity.ok(Map.of("connected", false, "provider", "postgresql"));
+        }
+        String raw = rawCloudConfig.trim();
+        if (!raw.startsWith("{")) {
+            return ResponseEntity.ok(Map.of("connected", false, "provider", "postgresql"));
+        }
+        try {
+            var node = objectMapper.readTree(raw);
+            if (!"postgresql".equalsIgnoreCase(node.path("provider").asText(""))) {
+                return ResponseEntity.ok(Map.of("connected", false, "provider", "postgresql"));
+            }
+            int port = PostgresConnectorService.DEFAULT_PORT;
+            JsonNode portNode = node.get("port");
+            if (portNode != null && !portNode.isNull() && !portNode.asText("").isBlank()) {
+                try {
+                    port = PostgresConnectorService.normalizePort(portNode.isNumber()
+                            ? portNode.asInt()
+                            : Integer.parseInt(portNode.asText().trim()));
+                } catch (Exception ignored) {
+                    port = PostgresConnectorService.DEFAULT_PORT;
+                }
+            }
+            String schema = node.path("schema").asText("").trim();
+            if (schema.isBlank()) {
+                schema = PostgresConnectorService.DEFAULT_SCHEMA;
+            }
+            return ResponseEntity.ok(Map.of(
+                    "connected", true,
+                    "provider", "postgresql",
+                    "host", node.path("host").asText(""),
+                    "port", port,
+                    "database", node.path("database").asText(""),
+                    "schema", schema,
+                    "ssl", node.path("ssl").asBoolean(false),
+                    "connectionLink", node.path("connectionLink").asText(""),
+                    "credentialsStored", !node.path("username").asText("").isBlank()
+            ));
+        } catch (Exception ex) {
+            return ResponseEntity.ok(Map.of("connected", false, "provider", "postgresql"));
+        }
+    }
+
+    private StoredPostgresConfig parseStoredPostgresConfig(String rawConfig) {
+        String raw = rawConfig == null ? "" : rawConfig.trim();
+        if (raw.isBlank()) throw new IllegalArgumentException("PostgreSQL connector config is empty");
+        if (!raw.startsWith("{")) throw new IllegalArgumentException("Stored connector config is not JSON; reconnect PostgreSQL.");
+        try {
+            var node = objectMapper.readTree(raw);
+            if (!"postgresql".equalsIgnoreCase(node.path("provider").asText(""))) {
+                throw new IllegalArgumentException("Stored connector is not PostgreSQL");
+            }
+            String host = node.path("host").asText("").trim();
+            int port = PostgresConnectorService.DEFAULT_PORT;
+            JsonNode portNode = node.get("port");
+            if (portNode != null && !portNode.isNull() && !portNode.asText("").isBlank()) {
+                port = PostgresConnectorService.normalizePort(portNode.isNumber()
+                        ? portNode.asInt()
+                        : Integer.parseInt(portNode.asText().trim()));
+            }
+            String database = node.path("database").asText("").trim();
+            String schema = node.path("schema").asText("").trim();
+            if (schema.isBlank()) {
+                schema = PostgresConnectorService.DEFAULT_SCHEMA;
+            }
+            String username = node.path("username").asText("").trim();
+            String password = node.path("password").asText("").trim();
+            boolean ssl = node.path("ssl").asBoolean(false);
+            if (host.isBlank()) throw new IllegalArgumentException("Stored PostgreSQL host is missing");
+            if (database.isBlank()) throw new IllegalArgumentException("Stored PostgreSQL database is missing");
+            if (username.isBlank()) throw new IllegalArgumentException("Stored PostgreSQL username is missing");
+            return new StoredPostgresConfig(host, port, database, schema, username, password, ssl);
+        } catch (IllegalArgumentException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new IllegalArgumentException("Stored PostgreSQL config is invalid JSON", ex);
+        }
+    }
+
+    private record StoredPostgresConfig(
+            String host, int port, String database, String schema, String username, String password, boolean ssl
+    ) {}
+
     // ── Shared helpers ────────────────────────────────────────────────────────
 
     private String getAsString(Map<String, Object> body, String key) {
         Object value = body.get(key);
         if (value == null) return null;
         return String.valueOf(value).trim();
+    }
+
+    private Integer getAsInteger(Map<String, Object> body, String key) {
+        Object value = body.get(key);
+        if (value == null) return null;
+        if (value instanceof Number n) {
+            return n.intValue();
+        }
+        String text = String.valueOf(value).trim();
+        if (text.isEmpty()) return null;
+        try {
+            return Integer.parseInt(text);
+        } catch (NumberFormatException ex) {
+            throw new IllegalArgumentException(key + " must be a number");
+        }
+    }
+
+    private boolean getAsBoolean(Map<String, Object> body, String key, boolean defaultValue) {
+        Object value = body.get(key);
+        if (value == null) return defaultValue;
+        if (value instanceof Boolean b) return b;
+        String text = String.valueOf(value).trim();
+        if (text.isEmpty()) return defaultValue;
+        return Boolean.parseBoolean(text);
     }
 
     private String extractStoredServiceAccountJson(com.fasterxml.jackson.databind.JsonNode configNode) {

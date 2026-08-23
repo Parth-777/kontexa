@@ -188,6 +188,83 @@
   font-size: 0.8rem;
 }
 
+.catalogue-lifecycle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.7rem;
+}
+
+.lifecycle-chip {
+  border: 1px solid rgba(142, 244, 232, 0.28);
+  border-radius: 999px;
+  color: #b7c9e2;
+  padding: 0.18rem 0.55rem;
+  font-size: 0.75rem;
+}
+
+.catalogue-semantic-block {
+  margin-top: 0.85rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 0.7rem;
+}
+
+.catalogue-semantic-block h3 {
+  margin: 0;
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #8ef4e8;
+}
+
+.catalogue-semantic-block p,
+.catalogue-semantic-block li {
+  color: #c5d3e8;
+  font-size: 0.9rem;
+}
+
+.catalogue-entity-list,
+.catalogue-semantic-block ul {
+  margin: 0.4rem 0 0;
+  padding-left: 1.1rem;
+}
+
+.table-role-label {
+  margin: 0.35rem 0 0;
+  color: #8fb5e2;
+  font-size: 0.82rem;
+}
+
+.column-structure,
+.column-semantics {
+  display: grid;
+  gap: 0.12rem;
+}
+
+.column-semantics {
+  margin-top: 0.45rem;
+  padding-top: 0.42rem;
+  border-top: 1px dashed rgba(255, 255, 255, 0.1);
+}
+
+.meta-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6f88a8;
+}
+
+.column-business-meaning {
+  color: #dce7f7 !important;
+  line-height: 1.45;
+}
+
+.column-meta {
+  margin: 0.22rem 0 0;
+  color: #8ea4c3;
+  font-size: 0.78rem;
+}
+
 .tenant-catalogue-error {
   color: #ffb2b2;
 }

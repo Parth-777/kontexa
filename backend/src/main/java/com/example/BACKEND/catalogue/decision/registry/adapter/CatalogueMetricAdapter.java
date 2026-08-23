@@ -9,7 +9,6 @@ import com.example.BACKEND.catalogue.schema.NestedSchemaFieldGraph;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 
 /**
@@ -57,12 +56,7 @@ public class CatalogueMetricAdapter {
     // ─── helpers ───────────────────────────────────────────────────────
 
     private ClientCatalogueEntity latestApproved(String tenantId) {
-        return approvalService.listForClient(tenantId).stream()
-                .filter(c -> "APPROVED".equalsIgnoreCase(c.getStatus()))
-                .max(Comparator.comparing(
-                        c -> c.getUpdatedAt() != null ? c.getUpdatedAt() : c.getCreatedAt()))
-                .orElseThrow(() -> new IllegalStateException(
-                        "No approved catalogue found for tenant: " + tenantId));
+        return approvalService.requireActiveApprovedCatalogue(tenantId);
     }
 
     private boolean isMetricColumn(CatalogueColumnEntity col) {

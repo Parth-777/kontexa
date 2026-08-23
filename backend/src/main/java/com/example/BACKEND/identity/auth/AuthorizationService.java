@@ -33,6 +33,18 @@ public class AuthorizationService {
         }
     }
 
+    /**
+     * Requires OWNER, ADMIN, or ANALYST for analytical / write mutations.
+     * VIEWER is denied with {@link ForbiddenException} (HTTP 403).
+     */
+    public void requireCanQuery() {
+        AuthContext ctx = AuthContextHolder.require();
+        if (!canQuery(ctx)) {
+            throw new ForbiddenException(
+                    "Query access required. Your role (" + ctx.role() + ") does not permit this action.");
+        }
+    }
+
     public boolean isAdmin(AuthContext ctx) {
         return ctx != null && ADMIN_ROLES.contains(ctx.role());
     }

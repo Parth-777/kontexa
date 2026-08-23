@@ -66,19 +66,26 @@ public class RiskLensAgent {
 
             if (cd.label() != null && cd.label().contains("contribution by")) {
                 for (Map<String, Object> row : cd.rows()) {
-                    double share = toDouble(row.get("share_pct"));
+                    double share = row.containsKey(MetricEvidenceAnnotator.SHARE_OF_TOTAL)
+                            ? toDouble(row.get(MetricEvidenceAnnotator.SHARE_OF_TOTAL))
+                            : toDouble(row.get("share_pct"));
                     if (share < 40) continue;
+                    if (!MetricEvidenceAnnotator.concentrationEvidenceOk(row,
+                            (int) toDouble(row.get(MetricEvidenceAnnotator.SEGMENT_COUNT)))) {
+                        continue;
+                    }
                     String segment = str(row.get("segment"));
                     candidates.add(new InsightCandidate(
-                            segment + " drives " + fmtPct(share) + " of " + extractMetric(cd.label()),
+                            segment + " accounts for " + fmtPct(share) + " of total "
+                                    + extractMetric(cd.label()),
                             InsightLens.RISK,
                             extractTable(cd.label()),
-                            share / 2,
+                            Math.min(45, share),
                             "RISK",
                             share >= 60 ? "HIGH" : "MEDIUM",
                             List.of(cd.label()),
                             highlights("Share", fmtPct(share), segment),
-                            List.of("segment"),
+                            List.of(extractDimFromContribution(cd.label()), extractMetric(cd.label())),
                             InsightLens.RISK.defaultOwner(),
                             segment
                     ));
@@ -129,6 +136,13 @@ public class RiskLensAgent {
         String mid = label.substring("EXEC:".length(), by).trim();
         String[] parts = mid.split(" ");
         return parts.length >= 2 ? parts[1] : "metric";
+    }
+
+    private String extractDimFromContribution(String label) {
+        if (label == null) return "segment";
+        int by = label.indexOf("contribution by");
+        if (by < 0) return "segment";
+        return label.substring(by + "contribution by".length()).trim();
     }
 
     private String fmtPct(double v) { return String.format("%.1f%%", v); }

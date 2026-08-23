@@ -93,12 +93,13 @@ public class CatalogueEnrichmentService {
                     Thread.sleep(RATE_LIMIT_PAUSE_MS);
                 }
             } catch (Exception e) {
-                System.out.println("[Enrichment] Failed to enrich table "
-                        + table.getTableName() + ": " + e.getMessage());
+                System.out.println("[Enrichment] BATCH FAILED table=" + table.getTableName()
+                        + " error=" + e.getMessage());
             }
         }
 
         writeRunSummary(runDir, catalogue);
+        logEnrichmentOutcome(catalogue);
         System.out.println("[Enrichment] Enrichment complete for all tables"
                 + " | batches=" + lastBatchDiagnostics.size()
                 + " | diagnosticsDir=" + runDir.toAbsolutePath());
@@ -158,6 +159,7 @@ public class CatalogueEnrichmentService {
             if (diag.retryCount < batchConfig.maxRetriesPerBatch()
                     && ("FAILED_HTTP".equals(diag.status)
                     || "FAILED_PARSE".equals(diag.status)
+                    || "FAILED_MAPPING".equals(diag.status)
                     || "FAILED_LENGTH".equals(diag.status)
                     || "FAILED_EMPTY".equals(diag.status))) {
                 System.out.println("[Enrichment] Retrying batch " + work.displayNumber()
@@ -191,8 +193,10 @@ public class CatalogueEnrichmentService {
                 continue;
             }
 
-            System.out.println("[Enrichment] Giving up on batch " + work.displayNumber()
-                    + " status=" + diag.status + " error=" + diag.errorMessage);
+            System.out.println("[Enrichment] BATCH FAILED batch=" + work.displayNumber()
+                    + " table=" + table.getTableName()
+                    + " status=" + diag.status
+                    + " error=" + diag.errorMessage);
             pauseBriefly();
         }
     }
@@ -253,16 +257,24 @@ public class CatalogueEnrichmentService {
 
         if (!completion.requestSent() || completion.httpStatus() != 200) {
             diag.status = "FAILED_HTTP";
+            System.out.println("[Enrichment] BATCH FAILED batch=" + diag.batchNumber
+                    + " table=" + table.getTableName()
+                    + " status=FAILED_HTTP http=" + completion.httpStatus());
             return diag;
         }
         if (!completion.hasContent()) {
             diag.status = "FAILED_EMPTY";
+            System.out.println("[Enrichment] BATCH FAILED batch=" + diag.batchNumber
+                    + " table=" + table.getTableName()
+                    + " status=FAILED_EMPTY");
             return diag;
         }
         if (completion.truncatedByLength() || "length".equalsIgnoreCase(completion.finishReason())) {
             diag.status = "FAILED_LENGTH";
             diag.errorMessage = "finish_reason=length — truncated response rejected (no partial salvage)";
-            System.out.println("[Enrichment][BATCH] #" + diag.batchNumber + " REJECTED truncated response");
+            System.out.println("[Enrichment] BATCH FAILED batch=" + diag.batchNumber
+                    + " table=" + table.getTableName()
+                    + " status=FAILED_LENGTH");
             return diag;
         }
         if (!"stop".equalsIgnoreCase(completion.finishReason())
@@ -274,17 +286,21 @@ public class CatalogueEnrichmentService {
         }
 
         try {
-            JsonNode root = objectMapper.readTree(stripMarkdownFence(completion.content()));
+            JsonNode root = objectMapper.readTree(extractJsonPayload(completion.content()));
             diag.jsonParseSucceeded = true;
             if (includeCatalogueLevel) {
-                applyCatalogueLevel(catalogue, root);
+                applyCatalogueLevel(catalogue, table, root);
             }
 
-            JsonNode columnsNode = root.path("columns");
-            if (!columnsNode.isArray()) {
+            JsonNode columnsNode = resolveColumnsNode(root);
+            if (columnsNode == null || !columnsNode.isArray()) {
                 diag.status = "FAILED_PARSE";
-                diag.parseExceptionMessage = "root.\"columns\" is not an array";
-                diag.parseStopLocation = "columns nodeType=" + columnsNode.getNodeType();
+                diag.parseExceptionMessage = "root.\"columns\" is not an array or object";
+                diag.parseStopLocation = "columns nodeType="
+                        + (columnsNode == null ? "null" : columnsNode.getNodeType());
+                System.out.println("[Enrichment] PARSE FAILED batch=" + diag.batchNumber
+                        + " table=" + table.getTableName()
+                        + " reason=" + diag.parseExceptionMessage);
                 return diag;
             }
 
@@ -293,14 +309,22 @@ public class CatalogueEnrichmentService {
             diag.mappedCount = mapped;
 
             if (mapped == 0) {
-                diag.status = "FAILED_PARSE";
-                diag.errorMessage = "valid JSON but zero columns mapped to ColumnInfo";
+                diag.status = "FAILED_MAPPING";
+                diag.errorMessage = "valid JSON but zero columns mapped to ColumnInfo"
+                        + " jsonColumns=" + columnsNode.size()
+                        + " leaves=" + diag.leafCount;
+                System.out.println("[Enrichment] MAPPING FAILED batch=" + diag.batchNumber
+                        + " table=" + table.getTableName()
+                        + " jsonColumns=" + columnsNode.size()
+                        + " leafCount=" + diag.leafCount
+                        + " leafNames=" + diag.leafNames);
                 return diag;
             }
 
             diag.status = "SUCCESS";
-            System.out.println("[Enrichment][BATCH] #" + diag.batchNumber
-                    + " SUCCESS mapped=" + mapped
+            System.out.println("[Enrichment] BATCH SUCCESS batch=" + diag.batchNumber
+                    + " table=" + table.getTableName()
+                    + " mapped=" + mapped
                     + "/" + diag.leafCount
                     + " prompt_tokens=" + diag.promptTokens
                     + " completion_tokens=" + diag.completionTokens
@@ -313,8 +337,10 @@ public class CatalogueEnrichmentService {
             diag.parseExceptionMessage = e.getMessage();
             diag.parseStopLocation = extractParseLocation(e);
             diag.errorMessage = e.getClass().getSimpleName() + ": " + e.getMessage();
-            System.out.println("[Enrichment][BATCH] #" + diag.batchNumber
-                    + " PARSE_FAIL " + diag.parseStopLocation);
+            System.out.println("[Enrichment] PARSE FAILED batch=" + diag.batchNumber
+                    + " table=" + table.getTableName()
+                    + " location=" + diag.parseStopLocation
+                    + " error=" + e.getClass().getSimpleName());
             return diag;
         }
     }
@@ -322,29 +348,29 @@ public class CatalogueEnrichmentService {
     private int applyColumnEnrichments(TableInfo table, JsonNode columnsNode) {
         int mapped = 0;
         for (JsonNode colNode : columnsNode) {
-            String columnName = colNode.path("columnName").asText();
-            ColumnInfo column = table.getColumn(columnName);
+            ColumnInfo column = resolveColumn(table, colNode);
             if (column == null) {
-                System.out.println("[Enrichment] Warning: LLM returned enrichment for unknown column: "
-                        + columnName);
+                String returnedName = firstText(colNode, "columnName", "column_name", "name", "fieldName", "field");
+                System.out.println("[Enrichment] MAPPING FAILED unknown column from LLM: "
+                        + (returnedName == null ? "(missing name)" : returnedName));
                 continue;
             }
             if (isContainer(column)) {
                 continue; // containers are local-only
             }
 
-            String description = textOrNull(colNode, "description");
+            String description = firstText(colNode, "description", "shortDescription", "short_description");
             if (description != null) {
                 column.setDescription(description);
             }
 
-            String businessMeaning = textOrNull(colNode, "businessMeaning");
+            String businessMeaning = firstText(colNode, "businessMeaning", "business_meaning");
             if (businessMeaning != null) {
                 column.setBusinessMeaning(businessMeaning);
             }
 
-            JsonNode synonymsNode = colNode.path("synonyms");
-            if (synonymsNode.isArray()) {
+            JsonNode synonymsNode = firstNode(colNode, "synonyms");
+            if (synonymsNode != null && synonymsNode.isArray()) {
                 List<String> synonyms = new ArrayList<>();
                 synonymsNode.forEach(s -> {
                     String syn = s.asText();
@@ -355,8 +381,8 @@ public class CatalogueEnrichmentService {
                 column.setSynonyms(synonyms);
             }
 
-            JsonNode valueMeaningsNode = colNode.path("valueMeanings");
-            if (valueMeaningsNode.isObject()) {
+            JsonNode valueMeaningsNode = firstNode(colNode, "valueMeanings", "value_meanings");
+            if (valueMeaningsNode != null && valueMeaningsNode.isObject()) {
                 Map<String, String> valueMeanings = new HashMap<>();
                 valueMeaningsNode.fields().forEachRemaining(entry ->
                         valueMeanings.put(entry.getKey(), entry.getValue().asText())
@@ -364,18 +390,47 @@ public class CatalogueEnrichmentService {
                 column.setValueMeanings(valueMeanings);
             }
 
-            String role = textOrNull(colNode, "role");
+            String role = firstText(colNode, "role");
             if (role != null) {
                 column.setRole(role.toLowerCase(Locale.ROOT));
             }
 
-            String aggregationMethod = textOrNull(colNode, "aggregationMethod");
+            String aggregationMethod = firstText(colNode, "aggregationMethod", "aggregation_method");
             if (aggregationMethod != null) {
                 column.setAggregationMethod(aggregationMethod.toUpperCase(Locale.ROOT));
             }
 
-            if (colNode.has("confidence") && !colNode.path("confidence").isNull()) {
-                column.setConfidence(colNode.path("confidence").asDouble());
+            JsonNode confidenceNode = firstNode(colNode, "confidence");
+            if (confidenceNode != null && !confidenceNode.isNull()) {
+                if (confidenceNode.isNumber()) {
+                    column.setConfidence(confidenceNode.asDouble());
+                } else {
+                    try {
+                        column.setConfidence(Double.parseDouble(confidenceNode.asText().trim()));
+                    } catch (Exception ignored) {
+                        // leave unset
+                    }
+                }
+            }
+
+            String displayUnit = firstText(colNode, "displayUnit", "display_unit");
+            if (displayUnit != null) {
+                column.setDisplayUnit(displayUnit.toLowerCase(Locale.ROOT));
+            }
+            JsonNode scaleNode = firstNode(colNode, "scaleToCanonical", "scale_to_canonical");
+            if (scaleNode != null && !scaleNode.isNull()) {
+                try {
+                    double scale = scaleNode.asDouble();
+                    if (!Double.isNaN(scale) && !Double.isInfinite(scale) && scale != 0.0) {
+                        column.setScaleToCanonical(scale);
+                    }
+                } catch (Exception ignored) {
+                    // leave unset
+                }
+            }
+            String grainLabel = firstText(colNode, "grainLabel", "grain_label");
+            if (grainLabel != null) {
+                column.setGrainLabel(grainLabel);
             }
 
             column.setEnriched(true);
@@ -402,15 +457,19 @@ public class CatalogueEnrichmentService {
         }
     }
 
-    private void applyCatalogueLevel(CatalogueResult catalogue, JsonNode root) {
-        String profile = textOrNull(root, "businessProfile");
-        if (profile != null && (catalogue.getBusinessProfile() == null
-                || catalogue.getBusinessProfile().isBlank())) {
-            catalogue.setBusinessProfile(profile);
+    private void applyCatalogueLevel(CatalogueResult catalogue, TableInfo table, JsonNode root) {
+        String profile = firstText(root, "businessProfile", "business_profile");
+        if (profile != null) {
+            if (table.getDescription() == null || table.getDescription().isBlank()) {
+                table.setDescription(profile);
+            }
+            if (catalogue.getBusinessProfile() == null || catalogue.getBusinessProfile().isBlank()) {
+                catalogue.setBusinessProfile(profile);
+            }
         }
 
-        JsonNode caveats = root.path("globalCaveats");
-        if (caveats.isArray() && !caveats.isEmpty()) {
+        JsonNode caveats = firstNode(root, "globalCaveats", "global_caveats");
+        if (caveats != null && caveats.isArray() && !caveats.isEmpty()) {
             List<String> merged = new ArrayList<>(catalogue.getGlobalCaveats());
             caveats.forEach(n -> {
                 String c = n.asText("");
@@ -421,8 +480,8 @@ public class CatalogueEnrichmentService {
             catalogue.setGlobalCaveats(merged);
         }
 
-        JsonNode entities = root.path("entities");
-        if (entities.isArray() && !entities.isEmpty()) {
+        JsonNode entities = firstNode(root, "entities");
+        if (entities != null && entities.isArray() && !entities.isEmpty()) {
             List<Map<String, String>> merged = new ArrayList<>(catalogue.getEntities());
             for (JsonNode e : entities) {
                 Map<String, String> row = new HashMap<>();
@@ -437,6 +496,13 @@ public class CatalogueEnrichmentService {
                 }
             }
             catalogue.setEntities(merged);
+
+            if (table.getDescription() == null || table.getDescription().isBlank()) {
+                String entityDesc = entities.get(0).path("description").asText("");
+                if (!entityDesc.isBlank()) {
+                    table.setDescription(entityDesc.trim());
+                }
+            }
         }
     }
 
@@ -447,9 +513,134 @@ public class CatalogueEnrichmentService {
     }
 
     private static String textOrNull(JsonNode node, String field) {
-        String v = node.path(field).asText(null);
-        if (v == null || v.isBlank()) return null;
-        return v.trim();
+        return firstText(node, field);
+    }
+
+    private static String firstText(JsonNode node, String... fields) {
+        if (node == null || fields == null) return null;
+        for (String field : fields) {
+            JsonNode child = node.get(field);
+            if (child == null || child.isNull() || child.isMissingNode()) continue;
+            String v = child.asText(null);
+            if (v != null && !v.isBlank()) return v.trim();
+        }
+        return null;
+    }
+
+    private static JsonNode firstNode(JsonNode node, String... fields) {
+        if (node == null || fields == null) return null;
+        for (String field : fields) {
+            JsonNode child = node.get(field);
+            if (child != null && !child.isNull() && !child.isMissingNode()) {
+                return child;
+            }
+        }
+        return null;
+    }
+
+    private JsonNode resolveColumnsNode(JsonNode root) {
+        if (root == null || root.isNull() || root.isMissingNode()) {
+            return null;
+        }
+        if (root.isArray()) {
+            return root;
+        }
+        JsonNode columns = firstNode(root, "columns", "Columns");
+        if (columns == null) {
+            return null;
+        }
+        if (columns.isArray()) {
+            return columns;
+        }
+        if (columns.isObject()) {
+            com.fasterxml.jackson.databind.node.ArrayNode arr = objectMapper.createArrayNode();
+            columns.fields().forEachRemaining(entry -> {
+                JsonNode val = entry.getValue();
+                if (val != null && val.isObject()) {
+                    com.fasterxml.jackson.databind.node.ObjectNode obj = val.deepCopy();
+                    if (firstText(obj, "columnName", "column_name", "name") == null) {
+                        obj.put("columnName", entry.getKey());
+                    }
+                    arr.add(obj);
+                }
+            });
+            return arr;
+        }
+        return null;
+    }
+
+    private ColumnInfo resolveColumn(TableInfo table, JsonNode colNode) {
+        String raw = firstText(colNode, "columnName", "column_name", "name", "fieldName", "field");
+        if (raw == null) {
+            return null;
+        }
+        raw = raw.replace("`", "").replace("\"", "").trim();
+        ColumnInfo column = table.getColumn(raw);
+        if (column != null) {
+            return column;
+        }
+        int dot = raw.lastIndexOf('.');
+        if (dot >= 0 && dot < raw.length() - 1) {
+            return table.getColumn(raw.substring(dot + 1));
+        }
+        return null;
+    }
+
+    private String extractJsonPayload(String raw) {
+        String s = stripMarkdownFence(raw);
+        if (s == null || s.isBlank()) {
+            return "";
+        }
+        String trimmed = s.trim();
+        if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+            return trimmed;
+        }
+        int obj = trimmed.indexOf('{');
+        int arr = trimmed.indexOf('[');
+        int start = -1;
+        if (obj >= 0 && (arr < 0 || obj < arr)) {
+            start = obj;
+        } else if (arr >= 0) {
+            start = arr;
+        }
+        if (start < 0) {
+            return trimmed;
+        }
+        char close = trimmed.charAt(start) == '{' ? '}' : ']';
+        int end = trimmed.lastIndexOf(close);
+        if (end > start) {
+            return trimmed.substring(start, end + 1);
+        }
+        return trimmed.substring(start);
+    }
+
+    private void logEnrichmentOutcome(CatalogueResult catalogue) {
+        int leaves = 0;
+        int enriched = 0;
+        int tablesWithoutSemantics = 0;
+        for (TableInfo table : catalogue.getTables()) {
+            int tableLeaves = 0;
+            int tableEnriched = 0;
+            for (ColumnInfo col : table.getColumns()) {
+                if (isContainer(col)) continue;
+                tableLeaves++;
+                leaves++;
+                boolean hasMeaning = (col.getDescription() != null && !col.getDescription().isBlank())
+                        || (col.getBusinessMeaning() != null && !col.getBusinessMeaning().isBlank());
+                if (col.isEnriched() && hasMeaning) {
+                    tableEnriched++;
+                    enriched++;
+                }
+            }
+            if (tableLeaves > 0 && tableEnriched == 0) {
+                tablesWithoutSemantics++;
+                System.out.println("[Enrichment] BATCH FAILED table=" + table.getTableName()
+                        + " — 0/" + tableLeaves + " leaves received description or businessMeaning");
+            }
+        }
+        System.out.println("[Enrichment] outcome tables=" + catalogue.getTables().size()
+                + " leavesWithSemantics=" + enriched + "/" + leaves
+                + " tablesWithoutSemantics=" + tablesWithoutSemantics);
     }
 
     private static String stripMarkdownFence(String raw) {

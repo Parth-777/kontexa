@@ -1,5 +1,6 @@
 package com.example.BACKEND.tenant;
 
+import com.example.BACKEND.identity.auth.PasswordService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -18,7 +19,8 @@ import java.util.regex.Pattern;
  *  - table: user_credentials
  *  - user id column: user_id
  *
- * Password is compared as plain text to support the current manual setup.
+ * Passwords are verified via {@link PasswordService} (BCrypt). Legacy plaintext
+ * rows are upgraded to BCrypt on successful login.
  */
 @Service
 public class TenantAuthService {
@@ -28,6 +30,7 @@ public class TenantAuthService {
     private static final Pattern IDENTIFIER = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]*$");
 
     private final JdbcTemplate jdbcTemplate;
+    private final PasswordService passwords;
     private final String schemaName;
     private final String tableName;
     private final String userIdColumn;
@@ -35,12 +38,14 @@ public class TenantAuthService {
 
     public TenantAuthService(
             JdbcTemplate jdbcTemplate,
+            PasswordService passwords,
             @Value("${auth.tenant.schema:public}") String schemaName,
             @Value("${auth.tenant.table:user_credentials}") String tableName,
             @Value("${auth.tenant.user-column:user_id}") String userIdColumn,
             @Value("${auth.tenant.cloud-link-column:cloud_db_link}") String cloudLinkColumn
     ) {
         this.jdbcTemplate = jdbcTemplate;
+        this.passwords = passwords;
         this.schemaName = validateIdentifier(schemaName, "auth.tenant.schema");
         this.tableName = validateIdentifier(tableName, "auth.tenant.table");
         this.userIdColumn = validateIdentifier(userIdColumn, "auth.tenant.user-column");
@@ -64,14 +69,18 @@ public class TenantAuthService {
 
         Map<String, Object> row = rows.getFirst();
         String storedPassword = readFirstPresentValue(row, List.of(
+                "password_hash",
                 "password",
                 "psw",
-                "password_hash",
                 "passwd"
         ));
 
-        if (storedPassword == null || !storedPassword.equals(normalizedPassword)) {
+        PasswordService.LoginPasswordCheck check = passwords.check(normalizedPassword, storedPassword);
+        if (!check.matched()) {
             return Optional.empty();
+        }
+        if (check.requiresRehash()) {
+            upgradeStoredPassword(row, normalizedUserId, passwords.hash(normalizedPassword));
         }
 
         String resolvedUserId = readFirstPresentValue(row, List.of(
@@ -168,6 +177,31 @@ public class TenantAuthService {
                     ex
             );
         }
+    }
+
+    private void upgradeStoredPassword(Map<String, Object> row, String userId, String bcryptHash) {
+        String column = resolvePasswordColumn(row);
+        if (column == null) return;
+        try {
+            jdbcTemplate.update(
+                    "UPDATE " + schemaName + "." + tableName
+                            + " SET " + column + " = ?"
+                            + " WHERE LOWER(" + userIdColumn + ") = LOWER(?)",
+                    bcryptHash, userId);
+        } catch (DataAccessException ignored) {
+            // Best-effort upgrade; login already succeeded
+        }
+    }
+
+    private String resolvePasswordColumn(Map<String, Object> row) {
+        for (String candidate : List.of("password_hash", "password", "psw", "passwd")) {
+            for (String key : row.keySet()) {
+                if (key.equalsIgnoreCase(candidate)) {
+                    return validateIdentifier(key, "password-column");
+                }
+            }
+        }
+        return null;
     }
 
     private String inferSchemaFromTenantLogin(String tenantLoginId) {

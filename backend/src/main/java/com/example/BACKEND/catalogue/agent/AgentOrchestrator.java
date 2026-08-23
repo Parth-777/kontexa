@@ -50,6 +50,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Coordinates all specialised agents for a tenant's "Refresh Insights" request.
@@ -104,6 +105,7 @@ public class AgentOrchestrator {
     private final ExecutiveNarrator           executiveNarrator;
     private final MeetingReadyInsightPolisher meetingReadyPolisher;
     private final InsightEvidenceValidator  evidenceValidator;
+    private final InsightQualityGate        insightQualityGate;
     private final InsightChartMapper        insightChartMapper;
     private final TableScalePolicy          tableScalePolicy;
     private final AnalysisWindowFactory     analysisWindowFactory;
@@ -140,6 +142,7 @@ public class AgentOrchestrator {
             ExecutiveNarrator           executiveNarrator,
             MeetingReadyInsightPolisher meetingReadyPolisher,
             InsightEvidenceValidator  evidenceValidator,
+            InsightQualityGate          insightQualityGate,
             InsightChartMapper          insightChartMapper,
             TableScalePolicy            tableScalePolicy,
             AnalysisWindowFactory       analysisWindowFactory,
@@ -175,6 +178,7 @@ public class AgentOrchestrator {
         this.executiveNarrator         = executiveNarrator;
         this.meetingReadyPolisher      = meetingReadyPolisher;
         this.evidenceValidator         = evidenceValidator;
+        this.insightQualityGate        = insightQualityGate;
         this.insightChartMapper        = insightChartMapper;
         this.tableScalePolicy          = tableScalePolicy;
         this.analysisWindowFactory     = analysisWindowFactory;
@@ -448,10 +452,16 @@ public class AgentOrchestrator {
                         + " verified candidates from " + allCandidates.size() + " lens findings.");
                 result.setConfidence(85);
             } else {
-                synthesizeFallback(clientId, catalogueNode, allHints, collected, kpiCards, anomalies, result);
-                if (result.getInsights() != null && !result.getInsights().isEmpty()) {
-                    result.setInsights(evidenceValidator.filterSupported(result.getInsights(), collected));
-                }
+                // Zero material candidates: do NOT dump raw warehouse samples into an LLM
+                // synthesis call (that previously exceeded model context). Empty is valid.
+                System.out.println(
+                        "[Orchestrator] No material insight candidates — skipping LLM synthesis fallback");
+                result.setInsights(List.of());
+                result.setInvestigations(List.of());
+                result.setFollowUpQuestions(List.of());
+                result.setReasoning("No material new insights detected from warehouse evidence.");
+                result.setConfidence(0);
+                result.setErrorMessage(null);
             }
 
             // 9. Merge Java-detected anomalies with LLM-detected ones (deduplicate by metric)
@@ -477,8 +487,48 @@ public class AgentOrchestrator {
             }
 
             // 10b. Meeting-ready polish — slide headlines, distinct So What, specific strategies
+            List<AgentDashboardResult.InsightCard> prePolishSnapshot = List.of();
             if (result.getInsights() != null && !result.getInsights().isEmpty()) {
+                prePolishSnapshot = snapshotCards(result.getInsights());
                 meetingReadyPolisher.polish(clientId, result.getInsights(), collected);
+            }
+
+            // 10b1. FINAL evidence validation AFTER polish — fail closed.
+            // If polish introduces unsupported claims, restore the pre-polish verified card.
+            if (result.getInsights() != null && !result.getInsights().isEmpty()) {
+                List<AgentDashboardResult.InsightCard> polished = result.getInsights();
+                List<AgentDashboardResult.InsightCard> post =
+                        evidenceValidator.filterSupported(polished, collected);
+                if (post == null || post.isEmpty()) {
+                    System.out.printf(
+                            "[Orchestrator] Post-polish validation rejected all %d card(s) — restoring pre-polish verified cards%n",
+                            polished.size());
+                    result.setInsights(prePolishSnapshot);
+                } else if (post.size() < polished.size()) {
+                    System.out.printf(
+                            "[Orchestrator] Post-polish evidence validator dropped %d insight(s)%n",
+                            polished.size() - post.size());
+                    result.setInsights(post);
+                } else {
+                    result.setInsights(post);
+                }
+            }
+
+            // 10b2. Fail-closed quality gate — drop generic filler / evidence-free / operational-error cards
+            if (result.getInsights() != null && !result.getInsights().isEmpty()) {
+                InsightQualityGate.GateResult gated = insightQualityGate.filter(result.getInsights());
+                result.setInsights(gated.kept());
+                if (gated.rejectedCount() > 0) {
+                    System.out.printf("[AgentOrchestrator] Quality gate rejected %d insight(s)%n",
+                            gated.rejectedCount());
+                }
+            }
+
+            // If fallback synthesis failed but other agents still produced cards, clear the soft error.
+            if (result.getInsights() != null && !result.getInsights().isEmpty()
+                    && result.getErrorMessage() != null
+                    && result.getErrorMessage().toLowerCase().contains("synthesis failed")) {
+                result.setErrorMessage(null);
             }
 
             // 10d. Attach chart specs (backend contract; frontend renders)
@@ -486,12 +536,17 @@ public class AgentOrchestrator {
                 attachCharts(result.getInsights(), collected);
             }
 
-            // 10c. Leadership brief — board-level summary from polished cards (not raw claims)
-            result.setDailyBrief(executiveNarrator.buildDailyBrief(
-                    clientId,
-                    leadershipBriefSources(result.getInsights()),
-                    topCandidates,
-                    collected));
+            // 10c. Leadership brief — never invent a brief when there are no surviving cards
+            if (result.getInsights() == null || result.getInsights().isEmpty()) {
+                boolean synthesisFailed = result.getErrorMessage() != null
+                        && result.getErrorMessage().toLowerCase().contains("synthesis failed");
+                result.setDailyBrief(synthesisFailed
+                        ? "Insight synthesis did not complete. No evidence-backed finding to brief."
+                        : "No material new insights detected.");
+            } else {
+                // Deterministic brief from verified card claims — no LLM invention in the inbox header
+                result.setDailyBrief(deterministicBrief(result.getInsights()));
+            }
 
             // 11. Apply decision memory — adjust confidence based on past user behaviour
             if (result.getInsights() != null) {
@@ -549,7 +604,10 @@ public class AgentOrchestrator {
     // LLM synthesis  (prompts intentionally match AgentAnalysisService)
     // ─────────────────────────────────────────────────────────────────────────
 
-    /** Fallback when no lens candidates pass materiality threshold. */
+    /**
+     * Bounded fallback synthesis — only used if explicitly re-enabled.
+     * Prefer {@link InsightsSynthesisPacketBuilder}; never ships full catalogue or raw SELECT *.
+     */
     private void synthesizeFallback(
             String clientId,
             JsonNode catalogueNode,
@@ -561,22 +619,36 @@ public class AgentOrchestrator {
     ) {
         String system = buildSystemPrompt();
         String user   = buildUserPrompt(clientId, catalogueNode, allHints, collected, kpiCards, anomalies);
+        if (InsightsSynthesisPacketBuilder.containsFullCatalogueDump(user)
+                || user.length() > InsightsSynthesisPacketBuilder.MAX_EVIDENCE_CHARS * 3) {
+            System.out.printf(
+                    "[AgentOrchestrator] Synthesis prompt still oversized (%d chars) — fail closed%n",
+                    user.length());
+            result.setInsights(List.of());
+            result.setInvestigations(List.of());
+            result.setAnomalies(List.of());
+            result.setFollowUpQuestions(List.of());
+            result.setReasoning("Evidence packet exceeded safe synthesis budget — no insight persisted.");
+            result.setConfidence(0);
+            result.setErrorMessage(
+                    "Insight synthesis skipped: evidence could not be safely bounded for the model.");
+            return;
+        }
         try {
             String llmResponse = openAiClient.chat(system, user);
             parseSynthesisResponse(llmResponse, result);
         } catch (Exception e) {
+            // Fail closed: never turn a synthesis/API failure into a business insight card.
             System.out.println("[AgentOrchestrator] LLM synthesis failed: " + e.getMessage());
-            result.setInsights(List.of(new AgentDashboardResult.InsightCard(
-                    "Analysis complete",
-                    "Data was collected but insight synthesis encountered an error. Raw KPI values are available above.",
-                    "MEDIUM")));
+            result.setInsights(List.of());
             result.setInvestigations(List.of());
             result.setAnomalies(List.of());
-            result.setFollowUpQuestions(List.of(
-                    "What are the main trends?", "Show me the top metrics",
-                    "Compare recent vs historical data"));
-            result.setReasoning("Data collected from " + collected.size() + " queries. LLM synthesis failed.");
-            result.setConfidence(30);
+            result.setFollowUpQuestions(List.of());
+            result.setReasoning("Data collected from " + collected.size()
+                    + " queries. LLM synthesis failed — no insight persisted.");
+            result.setConfidence(0);
+            result.setErrorMessage(
+                    "Insight synthesis failed. Warehouse evidence was collected but no business insight was produced.");
         }
     }
 
@@ -696,54 +768,35 @@ public class AgentOrchestrator {
             List<AgentDashboardResult.KpiCard> kpiCards,
             List<AgentDashboardResult.Anomaly> anomalies
     ) {
+        InsightsSynthesisPacketBuilder.Packet packet =
+                InsightsSynthesisPacketBuilder.build(collected, Set.of());
+
+        Map<String, Map<String, String>> meanings = new HashMap<>();
+        if (allHints != null) {
+            for (KpiDetectorService.ColumnHints hints : allHints) {
+                Map<String, EnrichedColInfo> enriched = buildEnrichedMap(catalogueNode, hints.tableName());
+                Map<String, String> perTable = new HashMap<>();
+                for (var e : enriched.entrySet()) {
+                    perTable.put(e.getKey(), e.getValue().businessMeaning());
+                }
+                meanings.put(hints.tableName(), perTable);
+            }
+        }
+
         StringBuilder sb = new StringBuilder();
         sb.append("CLIENT: ").append(clientId).append("\n\n");
-
         sb.append(buildExecutiveHeadlines(kpiCards, anomalies, collected)).append("\n");
-
-        sb.append("SCHEMA OVERVIEW\n===============\n");
-        for (KpiDetectorService.ColumnHints hints : allHints) {
-            Map<String, EnrichedColInfo> enriched = buildEnrichedMap(catalogueNode, hints.tableName());
-            sb.append("Table: ").append(hints.tableName()).append("\n");
-            if (hints.dateCol() != null)
-                sb.append("  Date column: ").append(hints.dateCol()).append("\n");
-            if (!hints.numericCols().isEmpty()) {
-                sb.append("  Numeric columns: ");
-                for (String col : hints.numericCols()) {
-                    EnrichedColInfo info = enriched.get(col.toLowerCase());
-                    String meaning = (info != null && !info.businessMeaning().isBlank())
-                            ? info.businessMeaning() : "numeric";
-                    sb.append(col).append(" (").append(meaning).append("), ");
-                }
-                sb.append("\n");
-            }
-            if (!hints.stringCols().isEmpty())
-                sb.append("  Categorical columns: ").append(String.join(", ", hints.stringCols())).append("\n");
-        }
-        sb.append("\n");
-
-        sb.append("COLLECTED DATA\n==============\n");
-        for (CollectedData data : collected) {
-            sb.append("## ").append(data.label()).append("\n");
-            List<Map<String, Object>> rows = data.rows();
-            int show = data.label().startsWith("Sample rows") ? Math.min(rows.size(), RAW_SAMPLE_SHOW)
-                                                              : Math.min(rows.size(), 30);
-            if (!rows.isEmpty()) {
-                sb.append(String.join(" | ", rows.get(0).keySet())).append("\n");
-                sb.append("-".repeat(60)).append("\n");
-            }
-            for (int i = 0; i < show; i++) {
-                sb.append(String.join(" | ", rows.get(i).values().stream()
-                        .map(v -> v == null ? "null" : v.toString()).toList())).append("\n");
-            }
-            if (rows.size() > show)
-                sb.append("... (").append(rows.size() - show).append(" more rows)\n");
-            sb.append("\n");
-        }
-
-        sb.append("Generate the executive insight JSON. ");
-        sb.append("Start from EXECUTIVE HEADLINES, then support with COLLECTED DATA. ");
-        sb.append("Write for a VP: implication first, evidence second, action third.");
+        sb.append(InsightsSynthesisPacketBuilder.schemaOverview(
+                allHints, packet.stats().columnsReferenced(), meanings)).append("\n");
+        sb.append("BOUNDED EVIDENCE PACKET\n=======================\n");
+        sb.append(packet.evidenceText()).append("\n");
+        sb.append("Generate the executive insight JSON from EXECUTIVE HEADLINES + BOUNDED EVIDENCE only. ");
+        sb.append("Do not invent categories or numbers absent from the packet.");
+        System.out.printf(
+                "[AgentOrchestrator] Synthesis packet datasets=%d rows=%d chars=%d omittedSample=%s truncated=%s%n",
+                packet.stats().datasetsIncluded(), packet.stats().rowsIncluded(),
+                packet.stats().evidenceChars(), packet.stats().omittedSampleRows(),
+                packet.stats().truncatedByBudget());
         return sb.toString();
     }
 
@@ -847,13 +900,7 @@ public class AgentOrchestrator {
                 for (JsonNode col : tableNode.path("columns")) {
                     String colName = col.path("columnName").asText("");
                     if (colName.isBlank()) continue;
-                    map.put(colName.toLowerCase(), new EnrichedColInfo(
-                            col.path("aggregationMethod").asText("NONE"),
-                            col.path("comparisonPeriod").asText("NONE"),
-                            col.path("dateGranularity").asText("N/A"),
-                            col.path("businessMeaning").asText(""),
-                            col.path("maxValue").asText("")
-                    ));
+                    map.put(colName.toLowerCase(), EnrichedColInfoFactory.fromColumnNode(col));
                 }
                 break;
             }
@@ -942,6 +989,7 @@ public class AgentOrchestrator {
             e.setStatus("AWAITING_CONFIRMATION");
             e.setGeneratedAt(now);
             e.setExpiresAt(expires);
+            e.setReadAt(null);
             entities.add(e);
         }
 
@@ -976,6 +1024,47 @@ public class AgentOrchestrator {
         } catch (Exception e) {
             return "[]";
         }
+    }
+
+    private String deterministicBrief(List<AgentDashboardResult.InsightCard> insights) {
+        if (insights == null || insights.isEmpty()) {
+            return "No material new insights detected.";
+        }
+        StringBuilder sb = new StringBuilder();
+        int n = Math.min(3, insights.size());
+        for (int i = 0; i < n; i++) {
+            String t = insights.get(i).getTitle();
+            if (t == null || t.isBlank()) continue;
+            if (!sb.isEmpty()) sb.append(' ');
+            sb.append(t.trim());
+            if (!t.trim().endsWith(".")) sb.append('.');
+        }
+        String out = sb.toString();
+        return out.length() > 480 ? out.substring(0, 477) + "..." : out;
+    }
+
+    private List<AgentDashboardResult.InsightCard> snapshotCards(
+            List<AgentDashboardResult.InsightCard> cards) {
+        if (cards == null || cards.isEmpty()) return List.of();
+        List<AgentDashboardResult.InsightCard> copy = new ArrayList<>();
+        for (AgentDashboardResult.InsightCard src : cards) {
+            AgentDashboardResult.InsightCard c = new AgentDashboardResult.InsightCard(
+                    src.getTitle(), src.getDescription(), src.getImpactLevel());
+            c.setBadge(src.getBadge());
+            c.setAgentName(src.getAgentName());
+            c.setMetricHighlights(src.getMetricHighlights() == null
+                    ? null : List.copyOf(src.getMetricHighlights()));
+            c.setSuggestedActions(src.getSuggestedActions() == null
+                    ? null : List.copyOf(src.getSuggestedActions()));
+            c.setReasons(src.getReasons() == null ? null : List.copyOf(src.getReasons()));
+            c.setStrategies(src.getStrategies() == null ? null : List.copyOf(src.getStrategies()));
+            c.setSourceColumns(src.getSourceColumns() == null
+                    ? null : List.copyOf(src.getSourceColumns()));
+            c.setChart(src.getChart());
+            c.setId(src.getId());
+            copy.add(c);
+        }
+        return copy;
     }
 
     private void attachCharts(List<AgentDashboardResult.InsightCard> insights,
@@ -1091,18 +1180,46 @@ public class AgentOrchestrator {
     }
 
     /**
-     * Returns all non-expired insight cards for a tenant (used by the feed endpoint).
-     * Auto-expires stale cards before returning.
+     * Inbox feed: non-dismissed, non-expired cards (unread + read).
+     * COMPLETED = read (stays visible); DECLINED/EXPIRED = hidden.
      */
     public List<InsightCardEntity> getActiveInsights(String clientId) {
         insightCardRepository.expireOldCards(clientId, LocalDateTime.now());
-        // Only unread inbox items — COMPLETED (mark as read) and DECLINED stay hidden
-        return insightCardRepository
+        List<InsightCardEntity> awaiting = insightCardRepository
                 .findByClientIdAndStatusOrderByGeneratedAtDesc(clientId, "AWAITING_CONFIRMATION");
+        List<InsightCardEntity> completed = insightCardRepository
+                .findByClientIdAndStatusOrderByGeneratedAtDesc(clientId, "COMPLETED");
+        List<InsightCardEntity> merged = new ArrayList<>(awaiting.size() + completed.size());
+        merged.addAll(awaiting);
+        merged.addAll(completed);
+        merged.sort((a, b) -> {
+            LocalDateTime ga = a.getGeneratedAt();
+            LocalDateTime gb = b.getGeneratedAt();
+            if (ga == null && gb == null) return 0;
+            if (ga == null) return 1;
+            if (gb == null) return -1;
+            return gb.compareTo(ga);
+        });
+        // Hide historically persisted operational-failure cards from the inbox.
+        List<InsightCardEntity> safe = new ArrayList<>();
+        for (InsightCardEntity card : merged) {
+            if (insightQualityGate.isOperationalFailureText(
+                    card.getTitle(), card.getDescription(), card.getReasons())) {
+                try {
+                    card.setStatus("EXPIRED");
+                    insightCardRepository.save(card);
+                } catch (Exception ignored) {
+                    // best-effort quarantine
+                }
+                continue;
+            }
+            safe.add(card);
+        }
+        return safe;
     }
 
     /**
-     * Updates a card's status to DECLINED or COMPLETED.
+     * Updates a card's status to DECLINED, COMPLETED, or AWAITING_CONFIRMATION (mark unread).
      * Returns true if the update was applied.
      */
     public boolean updateInsightStatus(java.util.UUID cardId, String clientId, String status) {
@@ -1111,14 +1228,30 @@ public class AgentOrchestrator {
 
     public boolean updateInsightStatus(java.util.UUID cardId, String clientId,
                                         String status, String dismissReason) {
-        if (!List.of("DECLINED", "COMPLETED").contains(status)) return false;
-        int updated = insightCardRepository.updateStatus(cardId, clientId, status, LocalDateTime.now());
+        if (!List.of("DECLINED", "COMPLETED", "AWAITING_CONFIRMATION").contains(status)) {
+            return false;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        int updated = insightCardRepository.updateStatus(cardId, clientId, status, now);
         if (updated > 0) {
+            // Prefer a fresh load after JPQL update (clears L1 cache via clearAutomatically).
             insightCardRepository.findById(cardId).ifPresent(card -> {
-                decisionMemoryService.record(card, status);
-                if ("DECLINED".equals(status) && dismissReason != null && !dismissReason.isBlank()) {
-                    System.out.printf("[DecisionMemory] Dismiss reason for %s: %s%n",
-                            cardId, dismissReason);
+                if ("COMPLETED".equals(status)) {
+                    card.setReadAt(now);
+                    card.setStatus("COMPLETED");
+                    insightCardRepository.save(card);
+                    decisionMemoryService.record(card, status);
+                } else if ("AWAITING_CONFIRMATION".equals(status)) {
+                    card.setReadAt(null);
+                    card.setStatus("AWAITING_CONFIRMATION");
+                    insightCardRepository.save(card);
+                } else if ("DECLINED".equals(status)) {
+                    card.setStatus("DECLINED");
+                    decisionMemoryService.record(card, status);
+                    if (dismissReason != null && !dismissReason.isBlank()) {
+                        System.out.printf("[DecisionMemory] Dismiss reason for %s: %s%n",
+                                cardId, dismissReason);
+                    }
                 }
             });
         }

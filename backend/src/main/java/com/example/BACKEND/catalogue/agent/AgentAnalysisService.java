@@ -514,16 +514,15 @@ public class AgentAnalysisService {
             parseSynthesisResponse(llmResponse, result);
         } catch (Exception e) {
             System.out.println("[AgentAnalysis] LLM synthesis failed: " + e.getMessage());
-            result.setInsights(List.of(new AgentDashboardResult.InsightCard(
-                    "Analysis complete",
-                    "Data was collected but insight synthesis encountered an error. Raw KPI values are available above.",
-                    "MEDIUM"
-            )));
+            result.setInsights(List.of());
             result.setInvestigations(List.of());
             result.setAnomalies(List.of());
-            result.setFollowUpQuestions(List.of("What are the main trends?", "Show me the top metrics", "Compare recent vs historical data"));
-            result.setReasoning("Data collected from " + collected.size() + " queries. LLM synthesis failed.");
-            result.setConfidence(30);
+            result.setFollowUpQuestions(List.of());
+            result.setReasoning("Data collected from " + collected.size()
+                    + " queries. LLM synthesis failed — no insight persisted.");
+            result.setConfidence(0);
+            result.setErrorMessage(
+                    "Insight synthesis failed. Warehouse evidence was collected but no business insight was produced.");
         }
     }
 

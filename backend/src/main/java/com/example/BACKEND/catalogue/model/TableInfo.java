@@ -11,6 +11,8 @@ public class TableInfo {
 
     private String tableName;
     private String tableSchema;
+    /** Table-level short description from generate-time enrichment (businessProfile). */
+    private String description;
     private long rowCount;
     private List<ColumnInfo> columns = new ArrayList<>();
 
@@ -26,6 +28,9 @@ public class TableInfo {
 
     public String getTableSchema() { return tableSchema; }
     public void setTableSchema(String tableSchema) { this.tableSchema = tableSchema; }
+
+    public String getDescription() { return description; }
+    public void setDescription(String description) { this.description = description; }
 
     public long getRowCount() { return rowCount; }
     public void setRowCount(long rowCount) { this.rowCount = rowCount; }

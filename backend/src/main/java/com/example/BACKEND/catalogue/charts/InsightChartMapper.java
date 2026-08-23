@@ -2,6 +2,9 @@ package com.example.BACKEND.catalogue.charts;
 
 import com.example.BACKEND.catalogue.agent.AgentDashboardResult;
 import com.example.BACKEND.catalogue.agent.CollectedData;
+import com.example.BACKEND.catalogue.agent.executive.MetricDisplayFormatter;
+import com.example.BACKEND.catalogue.agent.executive.MetricEvidenceAnnotator;
+import com.example.BACKEND.catalogue.agent.executive.MetricSemantics;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -33,8 +36,10 @@ public class InsightChartMapper {
         }
 
         // Revenue sources / weak areas / discovery ranking: segment vs metric value
-        if (lower.contains("sources by") || lower.contains("weak areas by") || lower.startsWith("discovery:") && lower.contains(" by ")) {
-            return buildSegmentBar(cd, "segment", guessValueKey(cd, List.of("segment_revenue", "metric_value")));
+        if (lower.contains("sources by") || lower.contains("weak areas by") || lower.contains("contribution by")
+                || (lower.startsWith("discovery:") && lower.contains(" by "))) {
+            return buildSegmentBar(cd, "segment", guessValueKey(cd, List.of(
+                    "segment_revenue", "segment_total", "metric_value", "share_of_total_pct", "share_pct")));
         }
 
         // Revenue monthly trend / trends over time
@@ -140,14 +145,20 @@ public class InsightChartMapper {
     private ChartSpec buildSegmentBar(CollectedData cd, String categoryKey, String valueKey) {
         if (valueKey == null) return null;
         List<Map<String, Object>> data = new ArrayList<>();
+        MetricSemantics sem = MetricSemantics.unknown();
+        if (cd.rows() != null && !cd.rows().isEmpty()) {
+            sem = MetricEvidenceAnnotator.fromRow(cd.rows().get(0));
+        }
         for (Map<String, Object> r : cd.rows()) {
             if (!r.containsKey(categoryKey) || !r.containsKey(valueKey)) continue;
             Map<String, Object> p = new LinkedHashMap<>();
             p.put(categoryKey, r.get(categoryKey));
-            p.put(valueKey, r.get(valueKey));
+            p.put(valueKey, MetricDisplayFormatter.chartValue(r.get(valueKey), sem));
             data.add(p);
         }
-        String fmt = valueKey.toLowerCase(Locale.ROOT).contains("share") ? "percent" : "number";
+        String fmt = valueKey.toLowerCase(Locale.ROOT).contains("share")
+                ? "percent"
+                : MetricDisplayFormatter.chartValueFormat(sem);
         return new ChartSpec(
                 ChartSpec.ChartType.BAR,
                 titleFromLabel(cd.label(), "Segment performance"),

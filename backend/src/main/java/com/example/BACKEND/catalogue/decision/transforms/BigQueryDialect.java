@@ -49,6 +49,27 @@ public class BigQueryDialect implements WarehouseDialect {
         return "FORMAT_DATE('%A', DATE(" + col(timestampColumn) + "))";
     }
 
+    @Override
+    public String quoteIdent(String ident) {
+        String raw = ident == null ? "" : ident.trim();
+        return "`" + raw.replace("`", "") + "`";
+    }
+
+    @Override
+    public String timestampTrunc(String timestampColumn, String grain) {
+        return "TIMESTAMP_TRUNC(" + col(timestampColumn) + ", " + grain.trim().toUpperCase() + ")";
+    }
+
+    @Override
+    public String safeDivide(String numeratorSql, String denominatorSql) {
+        return "SAFE_DIVIDE(" + numeratorSql + ", " + denominatorSql + ")";
+    }
+
+    @Override
+    public String countIf(String conditionSql) {
+        return "COUNTIF(" + conditionSql + ")";
+    }
+
     private String col(String c) {
         return c != null && !c.isBlank() ? c.trim() : "pickup_datetime";
     }

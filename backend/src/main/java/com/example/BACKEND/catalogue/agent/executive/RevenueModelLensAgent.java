@@ -46,17 +46,25 @@ public class RevenueModelLensAgent {
     private InsightCandidate fromTotalSummary(CollectedData cd) {
         if (cd.rows().isEmpty()) return null;
         Map<String, Object> row = cd.rows().get(0);
+        MetricSemantics sem = MetricEvidenceAnnotator.fromRow(row);
         double total = toDouble(row.get("total_revenue"));
         double avg = toDouble(row.get("avg_revenue"));
-        long count = toLong(row.get("trip_count"));
+        long count = toLong(row.containsKey("row_count") ? row.get("row_count") : row.get("trip_count"));
+        String grain = sem.resolvedGrainLabel();
+
+        String totalDisp = MetricDisplayFormatter.formatMetric(total, sem);
+        String avgDisp = MetricDisplayFormatter.formatMetric(avg, sem);
+        String countDisp = MetricDisplayFormatter.formatCount(count, grain);
+
+        // Relative materiality only — no raw magnitude across units
+        double impact = 20;
 
         return new InsightCandidate(
-                "Revenue base: " + ExecutiveVoice.formatValue(total) + " across "
-                        + ExecutiveVoice.formatValue(count) + " transactions",
-                InsightLens.REVENUE, "", total / 1_000_000 + 10,
+                "Revenue base: " + totalDisp + " across " + countDisp + " " + grain,
+                InsightLens.REVENUE, "", impact,
                 "INFO", "MEDIUM",
                 List.of(cd.label()),
-                highlights(ExecutiveVoice.formatValue(total), ExecutiveVoice.formatValue(avg), "Window total"),
+                highlights(totalDisp, avgDisp, "Window total"),
                 List.of(extractMetric(cd.label())),
                 "Finance", null
         );
@@ -74,7 +82,7 @@ public class RevenueModelLensAgent {
         return new InsightCandidate(
                 metric + " revenue " + ("UP".equals(direction) ? "rose" : "fell") + " "
                         + fmtPct(Math.abs(delta)) + " vs prior month",
-                InsightLens.REVENUE, "", Math.abs(delta) + 12,
+                InsightLens.REVENUE, "", Math.min(40, Math.abs(delta)),
                 "UP".equals(direction) ? "OPPORTUNITY" : "RISK",
                 Math.abs(delta) >= 10 ? "HIGH" : "MEDIUM",
                 List.of(cd.label()),
@@ -88,6 +96,7 @@ public class RevenueModelLensAgent {
         List<InsightCandidate> out = new ArrayList<>();
         if (cd.rows().size() < 3) return out;
 
+        MetricSemantics sem = MetricEvidenceAnnotator.fromRow(cd.rows().get(0));
         double latest = toDouble(cd.rows().get(0).get("revenue"));
         double oldest = toDouble(cd.rows().get(cd.rows().size() - 1).get("revenue"));
         if (oldest <= 0) return out;
@@ -98,67 +107,103 @@ public class RevenueModelLensAgent {
         out.add(new InsightCandidate(
                 "Revenue trend " + (change > 0 ? "up" : "down") + " "
                         + fmtPct(Math.abs(change)) + " from earliest to latest month in window",
-                InsightLens.REVENUE, "", Math.abs(change) + 8,
+                InsightLens.REVENUE, "", Math.min(40, Math.abs(change)),
                 change > 0 ? "OPPORTUNITY" : "RISK",
                 Math.abs(change) >= 15 ? "HIGH" : "MEDIUM",
                 List.of(cd.label()),
-                highlights(ExecutiveVoice.formatValue(latest), fmtPct(change), "Monthly series"),
+                highlights(MetricDisplayFormatter.formatMetric(latest, sem), fmtPct(change), "Monthly series"),
                 List.of(extractMetric(cd.label())),
                 "Finance", null
         ));
         return out;
     }
 
-    /** i) Where did most revenue come from */
+    /** i) Where did most revenue come from — share must be vs grand total */
     private InsightCandidate fromTopSource(CollectedData cd) {
         if (cd.rows().isEmpty()) return null;
         Map<String, Object> top = cd.rows().get(0);
+        if (!MetricEvidenceAnnotator.hasGrandTotalShare(top)) return null;
+
         String segment = str(top.get("segment"));
         double segRev = toDouble(top.get("segment_revenue"));
-        double total = cd.rows().stream().mapToDouble(r -> toDouble(r.get("segment_revenue"))).sum();
-        double share = total > 0 ? (segRev / total) * 100.0 : 0;
+        double share = toDouble(top.get(MetricEvidenceAnnotator.SHARE_OF_TOTAL));
+        int segments = (int) toDouble(top.get(MetricEvidenceAnnotator.SEGMENT_COUNT));
+        if (segments < 2) return null; // need comparative segment evidence
 
+        // Dominance/concentration language requires concentration gate
+        boolean dominance = share >= 40
+                && MetricEvidenceAnnotator.concentrationEvidenceOk(top, segments);
+
+        MetricSemantics sem = MetricEvidenceAnnotator.fromRow(top);
         String dim = extractDim(cd.label());
         String metric = extractMetricFromSourcesLabel(cd.label());
+        String valDisp = MetricDisplayFormatter.formatMetric(segRev, sem);
+
+        String claim;
+        if (dominance) {
+            claim = "Largest revenue source: " + segment + " via " + ExecutiveVoice.humanizeMetric(dim)
+                    + " at " + valDisp + " (" + fmtPct(share) + " of total)";
+        } else if (share > 0) {
+            claim = "Top revenue segment: " + segment + " via " + ExecutiveVoice.humanizeMetric(dim)
+                    + " at " + valDisp + " (" + fmtPct(share) + " of total)";
+        } else {
+            return null;
+        }
 
         return new InsightCandidate(
-                "Largest revenue source: " + segment + " via " + ExecutiveVoice.humanizeMetric(dim)
-                        + " at " + ExecutiveVoice.formatValue(segRev) + " (" + fmtPct(share) + " of top group)",
-                InsightLens.REVENUE, "", share + segRev / 1_000_000,
-                share >= 40 ? "RISK" : "OPPORTUNITY",
+                claim,
+                InsightLens.REVENUE, "", Math.min(50, share),
+                dominance ? "RISK" : "OPPORTUNITY",
                 share >= 40 ? "HIGH" : "MEDIUM",
                 List.of(cd.label()),
-                highlights(segment, ExecutiveVoice.formatValue(segRev), ExecutiveVoice.humanizeMetric(dim)),
-                List.of(metric, dim),
+                highlights(segment, valDisp, ExecutiveVoice.humanizeMetric(dim)),
+                List.of(dim, metric),
                 "Finance", segment
         );
     }
 
-    /** ii) Weak revenue areas */
     private InsightCandidate fromWeakArea(CollectedData cd) {
         if (cd.rows().isEmpty()) return null;
         Map<String, Object> weak = cd.rows().get(0);
         String segment = str(weak.get("segment"));
         double segRev = toDouble(weak.get("segment_revenue"));
+        MetricSemantics sem = MetricEvidenceAnnotator.fromRow(weak);
         String dim = extractDim(cd.label());
 
         return new InsightCandidate(
                 "Underperforming segment: " + segment + " in " + ExecutiveVoice.humanizeMetric(dim)
-                        + " at only " + ExecutiveVoice.formatValue(segRev) + " revenue",
+                        + " at only " + MetricDisplayFormatter.formatMetric(segRev, sem) + " revenue",
                 InsightLens.REVENUE, "", 15,
                 "RISK", "MEDIUM",
                 List.of(cd.label()),
-                highlights(segment, ExecutiveVoice.formatValue(segRev), "Weak area"),
+                highlights(segment, MetricDisplayFormatter.formatMetric(segRev, sem), "Weak area"),
                 List.of(dim),
                 "Ops", segment
         );
     }
 
-    /** v/vi) Strongest and weakest revenue factors */
     private InsightCandidate fromFactorModel(CollectedData cd) {
         if (cd.rows().isEmpty()) return null;
         Map<String, Object> meta = cd.rows().get(0);
         if (!meta.containsKey("strongest_factor")) return null;
+        if (!MetricEvidenceAnnotator.hasGrandTotalShare(meta)
+                && !meta.containsKey(MetricEvidenceAnnotator.SHARE_OF_TOTAL)) {
+            // require grand-total based strongest_share_pct
+            if (!meta.containsKey("strongest_share_pct")) return null;
+        }
+
+        int segmentCount = meta.containsKey(MetricEvidenceAnnotator.SEGMENT_COUNT)
+                ? (int) toDouble(meta.get(MetricEvidenceAnnotator.SEGMENT_COUNT))
+                : Math.max(0, cd.rows().size() - 1);
+
+        Map<String, Object> gateRow = new java.util.LinkedHashMap<>(meta);
+        if (!gateRow.containsKey(MetricEvidenceAnnotator.SHARE_OF_TOTAL)
+                && meta.containsKey("strongest_share_pct")) {
+            gateRow.put(MetricEvidenceAnnotator.SHARE_OF_TOTAL, meta.get("strongest_share_pct"));
+        }
+        if (!MetricEvidenceAnnotator.concentrationEvidenceOk(gateRow, segmentCount)) {
+            return null;
+        }
 
         String dim = ExecutiveVoice.humanizeMetric(str(meta.get("factor_dimension")));
         String strongest = str(meta.get("strongest_factor"));
@@ -167,9 +212,9 @@ public class RevenueModelLensAgent {
         double weakPct = toDouble(meta.get("weakest_share_pct"));
 
         return new InsightCandidate(
-                dim + " drives revenue mix — " + strongest + " contributes " + fmtPct(strongPct)
-                        + " vs " + weakest + " at " + fmtPct(weakPct),
-                InsightLens.REVENUE, "", strongPct + 10,
+                dim + " mix — " + strongest + " contributes " + fmtPct(strongPct)
+                        + " of total vs " + weakest + " at " + fmtPct(weakPct),
+                InsightLens.REVENUE, "", Math.min(50, strongPct),
                 strongPct >= 50 ? "RISK" : "INFO",
                 strongPct >= 50 ? "HIGH" : "MEDIUM",
                 List.of(cd.label()),
@@ -185,14 +230,15 @@ public class RevenueModelLensAgent {
         String pickup = str(top.get("pickup"));
         String dropoff = str(top.get("dropoff"));
         double rev = toDouble(top.get("route_revenue"));
+        MetricSemantics sem = MetricEvidenceAnnotator.fromRow(top);
 
         return new InsightCandidate(
                 "Highest-revenue corridor: " + pickup + " → " + dropoff
-                        + " generated " + ExecutiveVoice.formatValue(rev),
-                InsightLens.REVENUE, "", rev / 1_000_000 + 12,
+                        + " generated " + MetricDisplayFormatter.formatMetric(rev, sem),
+                InsightLens.REVENUE, "", 18,
                 "OPPORTUNITY", "HIGH",
                 List.of(cd.label()),
-                highlights(pickup + "→" + dropoff, ExecutiveVoice.formatValue(rev), "Route"),
+                highlights(pickup + "→" + dropoff, MetricDisplayFormatter.formatMetric(rev, sem), "Route"),
                 List.of("pickup", "dropoff"),
                 "Finance", pickup
         );
@@ -206,8 +252,8 @@ public class RevenueModelLensAgent {
         if (share < 1) return null;
 
         return new InsightCandidate(
-                component + " represents " + fmtPct(share) + " of total fare revenue in the model",
-                InsightLens.REVENUE, "", share + 5,
+                component + " represents " + fmtPct(share) + " of primary revenue in the model",
+                InsightLens.REVENUE, "", Math.min(40, share),
                 "INFO", "MEDIUM",
                 List.of(cd.label()),
                 highlights(component, fmtPct(share), "Revenue mix"),

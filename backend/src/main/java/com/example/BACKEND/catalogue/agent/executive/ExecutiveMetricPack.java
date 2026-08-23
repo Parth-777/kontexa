@@ -128,25 +128,42 @@ public class ExecutiveMetricPack {
         List<Map<String, Object>> rows = queryExecutor.execute(sql, label, ctx);
         if (rows.isEmpty()) return;
 
-        double total = rows.stream().mapToDouble(r -> toDouble(r.get("segment_total"))).sum();
+        MetricSemantics sem = MetricEvidenceAnnotator.semantics(ctx, metric);
+        double grand = MetricEvidenceAnnotator.fetchGrandTotal(
+                queryExecutor, ctx, metric, "EXEC: grand total " + metric);
+        if (grand <= 0) return;
+
         List<Map<String, Object>> enriched = new ArrayList<>();
         for (Map<String, Object> r : rows) {
             Map<String, Object> row = new LinkedHashMap<>(r);
             double segTotal = toDouble(r.get("segment_total"));
-            row.put("share_pct", total > 0 ? Math.round((segTotal / total) * 1000.0) / 10.0 : 0);
+            double share = (segTotal / grand) * 100.0;
+            row.put("share_pct", Math.round(share * 10.0) / 10.0);
+            row.put(MetricEvidenceAnnotator.SHARE_OF_TOTAL, Math.round(share * 10.0) / 10.0);
+            row.put(MetricEvidenceAnnotator.GRAND_TOTAL, grand);
+            row.put(MetricEvidenceAnnotator.SEGMENT_COUNT, rows.size());
+            MetricEvidenceAnnotator.putSemantics(row, sem, metric);
             enriched.add(row);
         }
         out.add(new CollectedData(label, sql, enriched));
 
-        if (!enriched.isEmpty() && total > 0) {
-            double topShare = toDouble(enriched.get(0).get("share_pct"));
+        if (!enriched.isEmpty()) {
             Map<String, Object> pareto = new LinkedHashMap<>();
             pareto.put("metric", metric);
             pareto.put("dimension", dim);
             pareto.put("top_segment", enriched.get(0).get("segment"));
-            pareto.put("top_share_pct", topShare);
+            pareto.put("top_share_pct", enriched.get(0).get("share_pct"));
+            pareto.put(MetricEvidenceAnnotator.SHARE_OF_TOTAL, enriched.get(0).get("share_pct"));
+            pareto.put(MetricEvidenceAnnotator.GRAND_TOTAL, grand);
+            pareto.put(MetricEvidenceAnnotator.SEGMENT_COUNT, enriched.size());
+            MetricEvidenceAnnotator.putSemantics(pareto, sem, metric);
+            if (!MetricEvidenceAnnotator.concentrationEvidenceOk(pareto, enriched.size())) {
+                return;
+            }
             pareto.put("concentration_note",
-                    topShare >= 50 ? "High concentration — top segment dominates" : "Moderate concentration");
+                    toDouble(pareto.get("top_share_pct")) >= 50
+                            ? "High concentration — top segment dominates"
+                            : "Moderate concentration");
             out.add(new CollectedData(
                     "EXEC: " + tableName + " " + metric + " concentration",
                     "-- derived from contribution",

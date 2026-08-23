@@ -4,6 +4,44 @@ import { getCataloguePreview, updateCatalogue } from '../api/catalogueApi';
 import { getSession } from '../api/session';
 import './TenantCataloguePage.css';
 
+function isPresent(value) {
+  if (value == null) return false;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed.length > 0 && trimmed !== '[]' && trimmed !== '{}';
+  }
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'object') return Object.keys(value).length > 0;
+  return true;
+}
+
+function parseMaybeJson(value) {
+  if (value == null) return null;
+  if (typeof value === 'object') return value;
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
+}
+
+function asList(value) {
+  const parsed = parseMaybeJson(value);
+  if (Array.isArray(parsed)) {
+    return parsed.filter((item) => item != null && String(item).trim() !== '');
+  }
+  return [];
+}
+
+function asRecord(value) {
+  const parsed = parseMaybeJson(value);
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+  return null;
+}
+
 function TenantCataloguePage() {
   const { catalogueId } = useParams();
   const navigate = useNavigate();
@@ -49,6 +87,9 @@ function TenantCataloguePage() {
       return (table.columns || []).some((col) => String(col.columnName || '').toLowerCase().includes(q));
     });
   }, [draftCatalogue, query]);
+
+  const entities = useMemo(() => asList(draftCatalogue?.entities), [draftCatalogue]);
+  const caveats = useMemo(() => asList(draftCatalogue?.globalCaveats), [draftCatalogue]);
 
   const handleTableDescriptionChange = (tableKey, value) => {
     setDraftCatalogue((curr) => {
@@ -159,12 +200,75 @@ function TenantCataloguePage() {
                 </div>
               </div>
               <p>
-                Client <strong>{draftCatalogue.clientId}</strong> | Schema <strong>{draftCatalogue.schemaName}</strong>{' '}
-                | Status <strong>{draftCatalogue.status}</strong>
+                Client <strong>{draftCatalogue.clientId}</strong>
+                {isPresent(draftCatalogue.databaseName) ? (
+                  <>
+                    {' '}
+                    | Database <strong>{draftCatalogue.databaseName}</strong>
+                  </>
+                ) : null}{' '}
+                | Schema <strong>{draftCatalogue.schemaName}</strong> | Status{' '}
+                <strong>{draftCatalogue.status}</strong>
               </p>
               <p>
                 {draftCatalogue.tableCount} tables | {draftCatalogue.columnCount} columns
               </p>
+              <div className="catalogue-lifecycle">
+                {isPresent(draftCatalogue.status) ? (
+                  <span className="lifecycle-chip">Status: {draftCatalogue.status}</span>
+                ) : null}
+                {isPresent(draftCatalogue.lineageKey) ? (
+                  <span className="lifecycle-chip">Lineage: {draftCatalogue.lineageKey}</span>
+                ) : null}
+                {isPresent(draftCatalogue.supersedesCatalogueId) ? (
+                  <span className="lifecycle-chip">
+                    Supersedes #{draftCatalogue.supersedesCatalogueId}
+                  </span>
+                ) : null}
+                {isPresent(draftCatalogue.createdAt) ? (
+                  <span className="lifecycle-chip">Created: {draftCatalogue.createdAt}</span>
+                ) : null}
+                {isPresent(draftCatalogue.updatedAt) ? (
+                  <span className="lifecycle-chip">Updated: {draftCatalogue.updatedAt}</span>
+                ) : null}
+              </div>
+              {isPresent(draftCatalogue.businessProfile) ? (
+                <div className="catalogue-semantic-block">
+                  <h3>Business profile</h3>
+                  <p>{draftCatalogue.businessProfile}</p>
+                </div>
+              ) : null}
+              {entities.length > 0 ? (
+                <div className="catalogue-semantic-block">
+                  <h3>Entities</h3>
+                  <ul className="catalogue-entity-list">
+                    {entities.map((entity, index) => {
+                      const name = typeof entity === 'string' ? entity : entity?.name;
+                      const description = typeof entity === 'object' ? entity?.description : '';
+                      const grain = typeof entity === 'object' ? entity?.grain : '';
+                      return (
+                        <li key={`${name || index}`}>
+                          <strong>{name || `Entity ${index + 1}`}</strong>
+                          {isPresent(grain) ? <span> · grain: {grain}</span> : null}
+                          {isPresent(description) ? <p>{description}</p> : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              ) : null}
+              {caveats.length > 0 ? (
+                <div className="catalogue-semantic-block">
+                  <h3>Global caveats</h3>
+                  <ul>
+                    {caveats.map((caveat, index) => (
+                      <li key={`${index}-${String(caveat).slice(0, 24)}`}>
+                        {typeof caveat === 'string' ? caveat : JSON.stringify(caveat)}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
               <input
                 type="text"
                 placeholder="Search table or column"
@@ -183,6 +287,9 @@ function TenantCataloguePage() {
                     </h2>
                     <span>{table.columnCount} columns</span>
                   </div>
+                  {isPresent(table.tableRole) ? (
+                    <p className="table-role-label">Table role: {table.tableRole}</p>
+                  ) : null}
                   {isEditMode ? (
                     <textarea
                       className="table-desc-input"
@@ -201,8 +308,11 @@ function TenantCataloguePage() {
                   <div className="column-list">
                     {(table.columns || []).map((column) => (
                       <div key={column.columnName} className="column-item">
-                        <strong>{column.columnName}</strong>
-                        <small>{column.dataType || 'type unknown'}</small>
+                        <div className="column-structure">
+                          <span className="meta-label">Structure</span>
+                          <strong>{column.columnName}</strong>
+                          <small>{column.dataType || 'type unknown'}</small>
+                        </div>
                         {isEditMode ? (
                           <>
                             <input
@@ -234,10 +344,45 @@ function TenantCataloguePage() {
                             />
                           </>
                         ) : (
-                          <>
-                            {column.role ? <em className="column-role">Role: {column.role}</em> : null}
-                            {column.description ? <p>{column.description}</p> : null}
-                          </>
+                          <div className="column-semantics">
+                            <span className="meta-label">Meaning</span>
+                            {isPresent(column.role) ? (
+                              <em className="column-role">Role: {column.role}</em>
+                            ) : null}
+                            {isPresent(column.description) ? <p>{column.description}</p> : null}
+                            {isPresent(column.businessMeaning) ? (
+                              <p className="column-business-meaning">{column.businessMeaning}</p>
+                            ) : null}
+                            {isPresent(column.aggregationMethod) ? (
+                              <p className="column-meta">Aggregation: {column.aggregationMethod}</p>
+                            ) : null}
+                            {asList(column.synonyms).length > 0 ? (
+                              <p className="column-meta">
+                                Synonyms: {asList(column.synonyms).join(', ')}
+                              </p>
+                            ) : null}
+                            {asRecord(column.valueMeanings)
+                              && Object.keys(asRecord(column.valueMeanings)).length > 0 ? (
+                              <p className="column-meta">
+                                Value meanings:{' '}
+                                {Object.entries(asRecord(column.valueMeanings))
+                                  .map(([key, val]) => `${key}=${val}`)
+                                  .join(', ')}
+                              </p>
+                            ) : null}
+                            {column.confidence != null && column.confidence !== '' ? (
+                              <p className="column-meta">Confidence: {column.confidence}</p>
+                            ) : null}
+                            {isPresent(column.displayUnit) ? (
+                              <p className="column-meta">Display unit: {column.displayUnit}</p>
+                            ) : null}
+                            {column.scaleToCanonical != null && column.scaleToCanonical !== '' ? (
+                              <p className="column-meta">Scale to canonical: {column.scaleToCanonical}</p>
+                            ) : null}
+                            {isPresent(column.grainLabel) ? (
+                              <p className="column-meta">Grain: {column.grainLabel}</p>
+                            ) : null}
+                          </div>
                         )}
                       </div>
                     ))}
