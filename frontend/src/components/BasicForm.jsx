@@ -53,7 +53,7 @@ amplitude.track("Submit Button Clicked", {
 
 
   try {
-    const response = await fetch("http://localhost:5000/api/forms/submit", {
+    const response = await fetch(`${process.env.REACT_APP_API_BASE_URL}/api/forms/submit`, {
       method: "POST",
       headers: getAuthHeaders(),
       body: JSON.stringify(formData),

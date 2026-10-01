@@ -1,6 +1,6 @@
 import { getAuthHeaders, readJsonOrThrow } from './session';
 
-const BASE_URL = 'http://localhost:5000';
+const BASE_URL = process.env.REACT_APP_API_BASE_URL;
 
 /** Unified workspace login — Workspace ID + password only */
 export async function workspaceLogin({ workspaceId, password, deviceLabel }) {
