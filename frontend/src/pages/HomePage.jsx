@@ -72,10 +72,10 @@ function HomePage() {
           <Link
             to="/"
             className="hp-nav-brand"
-            aria-label="Kontexa home"
+            aria-label="Tracefable home"
           >
             <span className="hp-nav-logo">K</span>
-            <span className="hp-nav-wordmark">KONTEXA</span>
+            <span className="hp-nav-wordmark">TRACEFABLE</span>
           </Link>
 
           <div className="hp-nav-links">
@@ -119,7 +119,7 @@ function HomePage() {
             </h1>
 
             <p className="mk-hero-lede">
-              Ask business questions in plain English. Kontexa analyzes your
+              Ask business questions in plain English. Tracefable analyzes your
               data, explains what changed, and surfaces the insights that
               matter.
             </p>
@@ -159,7 +159,7 @@ function HomePage() {
             <div className="mk-claude-label">
               <span className="mk-claude-dot">✦</span>
 
-              <strong>Kontexa + Claude</strong>
+              <strong>Tracefable + Claude</strong>
 
               <span className="mk-live-pill">
                 Integrated inside Claude
@@ -173,7 +173,7 @@ function HomePage() {
             <div className="mk-claude-frame">
               <img
                 src="/claude-kontexa-hero.png"
-                alt="Kontexa working inside Claude"
+                alt="Tracefable working inside Claude"
               />
 
               <div className="mk-image-caption">
@@ -265,7 +265,7 @@ function HomePage() {
 
             <div className="mk-new-way">
               <div className="mk-compare-title">
-                <span>WITH KONTEXA</span>
+                <span>WITH TRACEFABLE</span>
                 <em>Minutes, not weeks</em>
               </div>
 
@@ -389,7 +389,7 @@ function HomePage() {
               </h3>
 
               <p className="mk-detail-summary">
-                Kontexa found an 8.4% revenue decline, with Europe contributing
+                Tracefable found an 8.4% revenue decline, with Europe contributing
                 the largest share of the movement.
               </p>
 
@@ -424,7 +424,7 @@ function HomePage() {
                 </div>
 
                 <button className="mk-small-btn">
-                  Ask Kontexa
+                  Ask Tracefable
                 </button>
               </div>
             </div>
@@ -450,7 +450,7 @@ function HomePage() {
             </h2>
 
             <p>
-              Kontexa plans the investigation, queries the warehouse, and
+              Tracefable plans the investigation, queries the warehouse, and
               turns verified evidence into a decision-ready explanation.
             </p>
           </div>
@@ -598,7 +598,7 @@ function HomePage() {
               <h2>
                 Your data has answers.
                 <br />
-                <span>Kontexa helps you find them.</span>
+                <span>Tracefable helps you find them.</span>
               </h2>
             </div>
 
@@ -635,7 +635,7 @@ function HomePage() {
             </span>
 
             <span className="hp-nav-wordmark hp-nav-wordmark--muted">
-              KONTEXA
+              TRACEFABLE
             </span>
 
             <p>
@@ -652,7 +652,7 @@ function HomePage() {
           </div>
 
           <span className="hp-footer-copy">
-            © 2026 Kontexa. All rights reserved.
+            © 2026 Tracefable. All rights reserved.
           </span>
         </div>
       </footer>

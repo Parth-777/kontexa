@@ -210,7 +210,7 @@ function GetAccessModal({
 
             <p className="hp-modal-success-text">
               Thanks. Our team will contact you shortly
-              to provision your Kontexa workspace.
+              to provision your Tracefable workspace.
             </p>
 
             <p className="hp-modal-footer-note">
@@ -237,7 +237,7 @@ function GetAccessModal({
                 id="hp-modal-title"
                 className="hp-modal-title"
               >
-                Get access to Kontexa
+                Get access to Tracefable
               </h2>
 
               <p className="hp-modal-sub">

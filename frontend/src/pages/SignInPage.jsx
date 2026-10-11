@@ -84,7 +84,7 @@ function SignInPage() {
         <div className="auth-left-inner">
           <div className="auth-brand">
             <span className="auth-logo-mark">K</span>
-            <span className="auth-wordmark">KONTEXA</span>
+            <span className="auth-wordmark">TRACEFABLE</span>
           </div>
 
           <div className="auth-hero-copy">
@@ -124,11 +124,11 @@ function SignInPage() {
 
           <div className="auth-panel-brand">
             <span className="auth-logo-mark auth-logo-mark--sm">K</span>
-            <span className="auth-wordmark auth-wordmark--sm">KONTEXA</span>
+            <span className="auth-wordmark auth-wordmark--sm">TRACEFABLE</span>
           </div>
 
           <div className="auth-panel-header">
-            <h2 className="auth-panel-title">Sign in to Kontexa</h2>
+            <h2 className="auth-panel-title">Sign in to Tracefable</h2>
             <p className="auth-panel-sub">
               Access your enterprise analytics workspace.
             </p>

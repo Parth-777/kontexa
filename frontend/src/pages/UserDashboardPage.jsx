@@ -1136,7 +1136,7 @@ function UserDashboardPage() {
           <div className="app-brand">
             <span className="app-brand-logo">K</span>
             <div>
-              <p className="app-brand-title">KONTEXA</p>
+              <p className="app-brand-title">TRACEFABLE</p>
               <p className="app-brand-sub">{userId || 'User'}</p>
             </div>
           </div>

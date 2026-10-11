@@ -9,14 +9,14 @@ export default function FinalExperience({ onRequestAccess }) {
           The challenge isn&apos;t finding more data. It&apos;s finding what matters inside it.
         </p>
         <p className="hx-final-line hx-final-line--brand">
-          <span>KONTEXA</span> surfaces the signals worth acting on.
+          <span>TRACEFABLE</span> surfaces the signals worth acting on.
         </p>
       </div>
 
       <div className="hx-final-cta">
         <h2 className="hx-closing">
           Your data has answers.<br />
-          Kontexa surfaces them.
+          Tracefable surfaces them.
         </h2>
         <div className="hx-actions">
           <button type="button" className="hp-btn hp-btn--primary hp-btn--lg" onClick={onRequestAccess}>

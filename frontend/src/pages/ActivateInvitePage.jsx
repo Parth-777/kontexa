@@ -80,7 +80,7 @@ function ActivateInvitePage() {
           <div className="auth-panel-header">
             <div className="auth-brand auth-brand--compact">
               <span className="auth-logo-mark">K</span>
-              <span className="auth-wordmark">KONTEXA</span>
+              <span className="auth-wordmark">TRACEFABLE</span>
             </div>
             <h2 className="auth-panel-title">Activate your account</h2>
             <p className="auth-panel-sub">

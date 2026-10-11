@@ -158,7 +158,7 @@ function TenantCataloguePage() {
       <header className="tenant-catalogue-header">
         <div>
           <Link className="tenant-catalogue-brand" to="/">
-            KONTEXA
+            TRACEFABLE
           </Link>
           <p>Catalogue Viewer</p>
         </div>

@@ -436,7 +436,7 @@ export default function InsightsInbox({
                   `Investigate further: ${selected.title}. ${selected.description || ''}`
                 )}
               >
-                Ask Kontexa
+                Ask Tracefable
               </button>
               {selected.unread ? (
                 <button

@@ -36,7 +36,7 @@ export default function InvestigationExperience() {
   return (
     <section id="how" className="hx-exp hx-invest" ref={ref}>
       <div className="hx-invest-head">
-        <p className="hx-kicker">The Kontexa investigation</p>
+        <p className="hx-kicker">The Tracefable investigation</p>
         <h2 className="hx-title-md">From a question to a finding.</h2>
       </div>
 

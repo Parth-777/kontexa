@@ -1760,7 +1760,7 @@ function TenantDashboardPage() {
         <div className="sidebar-brand">
           <Link to="/" className="sidebar-logo">K</Link>
           <div className="sidebar-brand-text">
-            <span className="sidebar-product">Kontexa</span>
+            <span className="sidebar-product">Tracefable</span>
             <span className="sidebar-role">Admin Console</span>
           </div>
         </div>
